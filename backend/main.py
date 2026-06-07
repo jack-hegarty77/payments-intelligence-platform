@@ -1,10 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Request
 from models import Payment
-from risk_engine import calculate_risk
 from stripe_service import get_recent_payments
 import asyncio
 from transaction_generator import generate_transaction
+from risk_engine import assess_transaction
 
 app = FastAPI(title="Payments Intelligence API")
 
@@ -13,9 +14,14 @@ transactions_store = []
 async def transaction_stream():
     while True:
         tx = generate_transaction()
+
+        assessment = assess_transaction(tx)
+
+        tx.update(assessment)
+
         transactions_store.append(tx)
 
-        # keep only last 100
+        # Keep only the latest 100 transactions
         if len(transactions_store) > 100:
             transactions_store.pop(0)
 

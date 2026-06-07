@@ -1,138 +1,281 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import "./App.css";
 
-function App() {
-  const [merchant, setMerchant] = useState("");
-  const [amount, setAmount] = useState("");
-  const [country, setCountry] = useState("IE");
+function formatText(text) {
+  return text
+    .split("_")
+    .map(
+      (word) =>
+        word.charAt(0).toUpperCase() +
+        word.slice(1)
+    )
+    .join(" ");
+}
 
-  const [result, setResult] = useState(null);
-  const [history, setHistory] = useState([]);
+function getPrimaryReason(tx) {
+  if (tx.alerts.includes("sanctioned_country")) {
+    return "Sanctioned Country";
+  }
 
-  const submitPayment = async () => {
-    const payment = {
-      merchant,
-      amount: Number(amount),
-      country,
+  if (tx.alerts.includes("high_risk_merchant")) {
+    return "High Risk Merchant";
+  }
+
+  if (
+    tx.alerts.includes(
+      "unusual_transaction_amount"
+    )
+  ) {
+    return "Unusual Transaction Amount";
+  }
+
+  return "Under Investigation";
+}
+
+export default function App() {
+  const [transactions, setTransactions] =
+    useState([]);
+
+  const [
+    selectedTransaction,
+    setSelectedTransaction,
+  ] = useState(null);
+
+  useEffect(() => {
+    const fetchTransactions = async () => {
+      try {
+        const response = await fetch(
+          "http://127.0.0.1:8000/transactions/live"
+        );
+
+        const data = await response.json();
+        setTransactions(data);
+      } catch (error) {
+        console.error("Fetch error:", error);
+      }
     };
 
-    const response = await fetch(
-      "http://127.0.0.1:8000/payments/check",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payment),
-      }
+    fetchTransactions();
+
+    const interval = setInterval(
+      fetchTransactions,
+      2000
     );
 
-    const data = await response.json();
+    return () => clearInterval(interval);
+  }, []);
 
-    setResult(data);
+  const approvedTransactions = transactions
+    .filter((tx) => tx.status === "APPROVED")
+    .slice(-10)
+    .reverse();
 
-    setHistory([
-      {
-        ...payment,
-        ...data,
-      },
-      ...history,
-    ]);
+  const riskyTransactions = transactions
+    .filter(
+      (tx) =>
+        tx.status === "REVIEW" ||
+        tx.status === "BLOCKED"
+    )
+    .reverse();
 
-    setMerchant("");
-    setAmount("");
-    setCountry("IE");
+  const counts = {
+    APPROVED: transactions.filter(
+      (t) => t.status === "APPROVED"
+    ).length,
+    MONITOR: transactions.filter(
+      (t) => t.status === "MONITOR"
+    ).length,
+    NOTIFY: transactions.filter(
+      (t) => t.status === "NOTIFY"
+    ).length,
+    REVIEW: transactions.filter(
+      (t) => t.status === "REVIEW"
+    ).length,
+    BLOCKED: transactions.filter(
+      (t) => t.status === "BLOCKED"
+    ).length,
   };
 
   return (
-    <div
-      style={{
-        maxWidth: "700px",
-        margin: "40px auto",
-        fontFamily: "Arial",
-      }}
-    >
-      <h1>Payments Risk Dashboard</h1>
+    <div className="dashboard">
+      <header className="header">
+        <h1>
+          Payments Intelligence Platform
+        </h1>
+      </header>
 
-      <div
-        style={{
-          padding: "20px",
-          border: "1px solid #ddd",
-          borderRadius: "10px",
-        }}
-      >
-        <input
-          placeholder="Merchant"
-          value={merchant}
-          onChange={(e) => setMerchant(e.target.value)}
-        />
+      {/* SUMMARY */}
+      <div className="summary-grid">
+        <div className="summary-card">
+          <h2>{counts.APPROVED}</h2>
+          <p>Approved</p>
+        </div>
 
-        <br /><br />
+        <div className="summary-card">
+          <h2>{counts.MONITOR}</h2>
+          <p>Monitor</p>
+        </div>
 
-        <input
-          placeholder="Amount"
-          value={amount}
-          onChange={(e) => setAmount(e.target.value)}
-        />
+        <div className="summary-card">
+          <h2>{counts.NOTIFY}</h2>
+          <p>Notify</p>
+        </div>
 
-        <br /><br />
+        <div className="summary-card">
+          <h2>{counts.REVIEW}</h2>
+          <p>Review</p>
+        </div>
 
-        <input
-          placeholder="Country"
-          value={country}
-          onChange={(e) => setCountry(e.target.value)}
-        />
-
-        <br /><br />
-
-        <button onClick={submitPayment}>
-          Check Risk
-        </button>
+        <div className="summary-card blocked-tile">
+          <h2>{counts.BLOCKED}</h2>
+          <p>Blocked</p>
+        </div>
       </div>
 
-      {result && (
-        <div style={{ marginTop: "30px" }}>
-          <h2>Latest Result</h2>
-          <p>Risk Score: {result.risk_score}</p>
+      {/* MAIN GRID */}
+      <div className="content-grid">
 
-          <ul>
-            {result.alerts.map((alert) => (
-              <li key={alert}>{alert}</li>
-            ))}
-          </ul>
+        {/* APPROVED */}
+        <section className="panel">
+          <h2>✅ Approved Feed</h2>
+
+          {approvedTransactions.map((tx) => (
+            <div
+              key={tx.transaction_id}
+              className="approved-card"
+            >
+              <strong>{tx.merchant}</strong>
+              <p>
+                €{tx.amount} · {tx.country}
+              </p>
+            </div>
+          ))}
+        </section>
+
+        {/* RISK QUEUE */}
+        <section className="panel risk-panel">
+          <h2>🚨 Risk Queue</h2>
+
+          {riskyTransactions.map((tx) => (
+            <div
+              key={tx.transaction_id}
+              className="risk-card"
+              onClick={() =>
+                setSelectedTransaction(tx)
+              }
+            >
+              <div className="risk-card-header">
+                <h3>{tx.merchant}</h3>
+
+                <span
+                  className={`status-badge ${tx.status.toLowerCase()}`}
+                >
+                  {tx.status}
+                </span>
+              </div>
+
+              <p>
+                €{tx.amount} · {tx.country}
+              </p>
+
+              <p className="primary-reason">
+                {getPrimaryReason(tx)}
+              </p>
+            </div>
+          ))}
+        </section>
+
+        {/* SUMMARY PANEL */}
+        <section className="panel">
+          <h2>📊 Alert Summary</h2>
+
+          <p>
+            Monitoring active across all
+            incoming payments.
+          </p>
+
+          <p>
+            Click a risk alert to investigate.
+          </p>
+        </section>
+      </div>
+
+      {/* MODAL */}
+      {selectedTransaction && (
+        <div
+          className="modal-overlay"
+          onClick={() =>
+            setSelectedTransaction(null)
+          }
+        >
+          <div
+            className="modal"
+            onClick={(e) =>
+              e.stopPropagation()
+            }
+          >
+            <h2>
+              Transaction Investigation
+            </h2>
+
+            <p>
+              <strong>Merchant:</strong>{" "}
+              {
+                selectedTransaction.merchant
+              }
+            </p>
+
+            <p>
+              <strong>Amount:</strong> €
+              {selectedTransaction.amount}
+            </p>
+
+            <p>
+              <strong>Country:</strong>{" "}
+              {
+                selectedTransaction.country
+              }
+            </p>
+
+            <p>
+              <strong>Status:</strong>{" "}
+              {
+                selectedTransaction.status
+              }
+            </p>
+
+            <h3>Alerts</h3>
+            <ul>
+              {selectedTransaction.alerts.map(
+                (a) => (
+                  <li key={a}>
+                    {formatText(a)}
+                  </li>
+                )
+              )}
+            </ul>
+
+            <h3>Actions</h3>
+            <ul>
+              {selectedTransaction.actions.map(
+                (a) => (
+                  <li key={a}>
+                    {formatText(a)}
+                  </li>
+                )
+              )}
+            </ul>
+
+            <button
+              onClick={() =>
+                setSelectedTransaction(null)
+              }
+            >
+              Close
+            </button>
+          </div>
         </div>
       )}
-
-      <div style={{ marginTop: "40px" }}>
-        <h2>Payment History</h2>
-
-        {history.map((payment, index) => (
-          <div
-            key={index}
-            style={{
-              border: "1px solid #ddd",
-              padding: "15px",
-              borderRadius: "10px",
-              marginBottom: "10px",
-            }}
-          >
-            <strong>{payment.merchant}</strong>
-
-            <p>
-              €{payment.amount} — {payment.country}
-            </p>
-
-            <p>
-              Risk Score: {payment.risk_score}
-            </p>
-
-            <p>
-              Alerts: {payment.alerts.join(", ") || "None"}
-            </p>
-          </div>
-        ))}
-      </div>
     </div>
   );
 }
-
-export default App;

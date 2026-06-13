@@ -1,3 +1,6 @@
+from models import Transaction
+
+
 HIGH_RISK_MERCHANTS = [
     "Acme Crypto Exchange",
     "Shadow Trading Ltd",
@@ -84,13 +87,13 @@ def determine_status_and_actions(risk_score):
     )
 
 
-def assess_transaction(transaction):
+def assess_transaction(transaction: Transaction):
     risk_score = 0
     alerts = []
 
-    merchant = transaction.get("merchant")
-    country = transaction.get("country")
-    amount = transaction.get("amount", 0)
+    merchant = transaction.merchant
+    country = transaction.country
+    amount = transaction.amount
 
     # -------------------------
     # High Risk Merchant
@@ -110,22 +113,29 @@ def assess_transaction(transaction):
     # Merchant Amount Anomaly
     # -------------------------
     if merchant in MERCHANT_RISK_PROFILES:
-        threshold = MERCHANT_RISK_PROFILES[merchant]["large_threshold"]
+        threshold = MERCHANT_RISK_PROFILES[merchant][
+            "large_threshold"
+        ]
 
         if amount > threshold:
             risk_score += 25
-            alerts.append("unusual_transaction_amount")
+            alerts.append(
+                "unusual_transaction_amount"
+            )
 
     # -------------------------
     # Decision
     # -------------------------
-    status, actions = determine_status_and_actions(
-        risk_score
+    status, actions = (
+        determine_status_and_actions(
+            risk_score
+        )
     )
 
-    return {
-        "risk_score": risk_score,
-        "status": status,
-        "alerts": alerts,
-        "actions": actions,
-    }
+    # Populate model
+    transaction.risk_score = risk_score
+    transaction.status = status
+    transaction.alerts = alerts
+    transaction.actions = actions
+
+    return transaction

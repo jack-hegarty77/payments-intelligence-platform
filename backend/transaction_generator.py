@@ -1,6 +1,7 @@
 import random
 import uuid
 from datetime import datetime
+from models import Transaction
 
 # -----------------------------
 # Merchant Profiles (realistic spend ranges)
@@ -52,34 +53,38 @@ def generate_transaction():
     transaction_id = str(uuid.uuid4())
     timestamp = datetime.utcnow().isoformat()
 
-    # ~3% high-risk transactions
     is_high_risk = random.random() < 0.03
 
     if is_high_risk:
         merchant = random.choice(HIGH_RISK_MERCHANTS)
 
-        return {
-            "transaction_id": transaction_id,
-            "timestamp": timestamp,
-            "merchant": merchant,
-            "country": random.choice(SANCTIONED_COUNTRIES),
-            "amount": round(random.uniform(1000, 5000), 2),
-            "type": "high_risk",
-        }
+        return Transaction(
+            transaction_id=transaction_id,
+            timestamp=timestamp,
+            merchant=merchant,
+            country=random.choice(SANCTIONED_COUNTRIES),
+            amount=round(random.uniform(1000, 5000), 2),
+        )
 
-    # Normal transaction
-    merchant = random.choice(list(MERCHANT_PROFILES.keys()))
+    merchant = random.choice(
+        list(MERCHANT_PROFILES.keys())
+    )
 
     min_amount, max_amount = MERCHANT_PROFILES[merchant]
-    amount = round(random.uniform(min_amount, max_amount), 2)
 
-    country = random.choice(MERCHANT_COUNTRIES[merchant])
+    amount = round(
+        random.uniform(min_amount, max_amount),
+        2,
+    )
 
-    return {
-        "transaction_id": transaction_id,
-        "timestamp": timestamp,
-        "merchant": merchant,
-        "country": country,
-        "amount": amount,
-        "type": "normal",
-    }
+    country = random.choice(
+        MERCHANT_COUNTRIES[merchant]
+    )
+
+    return Transaction(
+        transaction_id=transaction_id,
+        timestamp=timestamp,
+        merchant=merchant,
+        country=country,
+        amount=amount,
+    )

@@ -41,29 +41,35 @@ export default function App() {
     setSelectedTransaction,
   ] = useState(null);
 
-  useEffect(() => {
-    const fetchTransactions = async () => {
-      try {
-        const response = await fetch(
-          "http://127.0.0.1:8000/transactions/live"
-        );
+useEffect(() => {
+  const socket = new WebSocket(
+    "ws://127.0.0.1:8000/ws/transactions"
+  );
 
-        const data = await response.json();
-        setTransactions(data);
-      } catch (error) {
-        console.error("Fetch error:", error);
-      }
-    };
+  socket.onopen = () => {
+    console.log("WebSocket connected");
+  };
 
-    fetchTransactions();
+  socket.onmessage = (event) => {
+    const tx = JSON.parse(event.data);
 
-    const interval = setInterval(
-      fetchTransactions,
-      2000
-    );
+    setTransactions((prev) => {
+      const updated = [...prev, tx];
 
-    return () => clearInterval(interval);
-  }, []);
+      return updated.slice(-100); // keep memory bounded
+    });
+  };
+
+  socket.onerror = (error) => {
+    console.error("WebSocket error:", error);
+  };
+
+  socket.onclose = () => {
+    console.log("WebSocket disconnected");
+  };
+
+  return () => socket.close();
+}, []);
 
   const approvedTransactions = transactions
     .filter((tx) => tx.status === "APPROVED")

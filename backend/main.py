@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from models import Payment, Transaction
@@ -12,21 +12,35 @@ from risk_engine import assess_transaction
 app = FastAPI(title="Payments Intelligence API")
 
 transactions_store = []
+connected_clients = []
 
 
 async def transaction_stream():
     while True:
+
         tx = generate_transaction()
 
         tx = assess_transaction(tx)
 
-        transactions_store.append(
-            tx.model_dump()
-        )
+        transaction_json = tx.model_dump()
+
+        transactions_store.append(transaction_json)
 
         # Keep only latest 100 transactions
         if len(transactions_store) > 100:
             transactions_store.pop(0)
+
+        disconnected = []
+
+        for client in connected_clients:
+            try:
+                await client.send_json(transaction_json)
+            except Exception:
+                disconnected.append(client)
+
+        for client in disconnected:
+            if client in connected_clients:
+                connected_clients.remove(client)
 
         await asyncio.sleep(1)
 
@@ -46,6 +60,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.websocket("/ws/transactions")
+async def websocket_transactions(websocket: WebSocket):
+
+    await websocket.accept()
+
+    connected_clients.append(websocket)
+
+    print(
+        f"Client connected ({len(connected_clients)} total)"
+    )
+
+    try:
+        while True:
+            # Keep the connection alive.
+            await websocket.receive_text()
+
+    except WebSocketDisconnect:
+
+        if websocket in connected_clients:
+            connected_clients.remove(websocket)
+
+        print(
+            f"Client disconnected ({len(connected_clients)} remaining)"
+        )
 
 @app.get("/")
 def home():

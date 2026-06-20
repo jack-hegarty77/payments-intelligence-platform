@@ -6,7 +6,7 @@ from stripe_service import get_recent_payments
 
 import asyncio
 
-from transaction_generator import generate_transaction
+from simulation_engine import generate_transaction
 from risk_engine import assess_transaction
 
 app = FastAPI(title="Payments Intelligence API")

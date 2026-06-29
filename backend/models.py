@@ -1,11 +1,31 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import List
 
+
+# =====================================================
+# INPUT MODEL (used by /payments/check)
+# =====================================================
 
 class Payment(BaseModel):
     merchant: str
-    amount: float
     country: str
+    amount: float
 
+
+# =====================================================
+# RISK FINDING MODEL
+# =====================================================
+
+class Finding(BaseModel):
+    detector: str
+    severity: str
+    title: str
+    description: str
+
+
+# =====================================================
+# CORE TRANSACTION MODEL
+# =====================================================
 
 class Transaction(BaseModel):
     transaction_id: str
@@ -15,9 +35,18 @@ class Transaction(BaseModel):
     country: str
     amount: float
 
-    risk_score: int = 0
+    # -----------------------------
+    # NEW ARCHITECTURE
+    # -----------------------------
+    decision: str = "APPROVED"
+    primary_reason: str = ""
 
-    alerts: list[str] = []
-    actions: list[str] = []
+    findings: List[Finding] = Field(default_factory=list)
+    actions: List[str] = Field(default_factory=list)
 
+    # -----------------------------
+    # TEMP COMPAT LAYER
+    # -----------------------------
     status: str = "APPROVED"
+    alerts: List[str] = Field(default_factory=list)
+    risk_score: int = 0

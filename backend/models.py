@@ -36,7 +36,16 @@ class Transaction(BaseModel):
     amount: float
 
     # -----------------------------
-    # NEW ARCHITECTURE
+    # Simulation metadata
+    # -----------------------------
+    customer_id: str
+    merchant_category: str
+
+    simulation_day: int
+    simulation_hour: int
+
+    # -----------------------------
+    # New risk architecture
     # -----------------------------
     decision: str = "APPROVED"
     primary_reason: str = ""
@@ -45,7 +54,7 @@ class Transaction(BaseModel):
     actions: List[str] = Field(default_factory=list)
 
     # -----------------------------
-    # TEMP COMPAT LAYER
+    # Temporary compatibility layer
     # -----------------------------
     status: str = "APPROVED"
     alerts: List[str] = Field(default_factory=list)

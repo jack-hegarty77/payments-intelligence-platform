@@ -76,6 +76,10 @@ useEffect(() => {
     .slice(-10)
     .reverse();
 
+  const tickerTransactions = transactions
+    .slice(-30)
+    .reverse();
+
   const riskyTransactions = transactions
     .filter(
       (tx) =>
@@ -102,6 +106,22 @@ useEffect(() => {
     ).length,
   };
 
+  function getTickerClass(tx) {
+    switch (tx.status) {
+      case "BLOCKED":
+        return "ticker-card blocked";
+
+      case "REVIEW":
+        return "ticker-card review";
+
+      case "MONITOR":
+        return "ticker-card monitor";
+
+      default:
+        return "ticker-card approved";
+    }
+  }
+
   return (
     <div className="dashboard">
       <header className="header">
@@ -109,6 +129,41 @@ useEffect(() => {
           Payments Intelligence Platform
         </h1>
       </header>
+
+      <div className="ticker-container">
+
+        <div className="ticker-track">
+
+          {tickerTransactions.map((tx) => (
+
+            <div
+              key={tx.transaction_id}
+              className={getTickerClass(tx)}
+            >
+
+              <strong>
+                {tx.timestamp.slice(11,16)}
+              </strong>
+
+              <span>
+                {tx.customer_id}
+              </span>
+
+              <span>
+                {tx.merchant}
+              </span>
+
+              <span>
+                €{tx.amount}
+              </span>
+
+            </div>
+
+          ))}
+
+        </div>
+
+      </div>
 
       {/* SUMMARY */}
       <div className="summary-grid">

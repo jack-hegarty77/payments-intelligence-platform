@@ -152,3 +152,71 @@ button {
   border-radius: 6px;
   cursor: pointer;
 }
+
+/* --------------------------- */
+/* LIVE TICKER */
+/* --------------------------- */
+
+.ticker-container {
+
+    overflow-x: auto;
+
+    margin: 20px 0;
+
+    white-space: nowrap;
+
+    border-radius: 10px;
+
+}
+
+.ticker-track {
+
+    display: flex;
+
+    gap: 10px;
+
+}
+
+.ticker-card {
+
+    display: flex;
+
+    gap: 12px;
+
+    align-items: center;
+
+    padding: 8px 14px;
+
+    border-radius: 8px;
+
+    min-width: fit-content;
+
+    color: white;
+
+    font-size: 14px;
+
+}
+
+.ticker-card.approved {
+
+    background: #2e7d32;
+
+}
+
+.ticker-card.monitor {
+
+    background: #ff9800;
+
+}
+
+.ticker-card.review {
+
+    background: #ef6c00;
+
+}
+
+.ticker-card.blocked {
+
+    background: #c62828;
+
+}

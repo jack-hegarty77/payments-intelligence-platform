@@ -1,6 +1,12 @@
 from models import Transaction, Finding
 from simulation_engine import MERCHANTS, SANCTIONED_COUNTRIES
 
+# --------------------------------------------------
+# Behaviour state
+# --------------------------------------------------
+
+customer_daily_totals = {}
+
 
 # =====================================================
 # DETECTORS
@@ -59,6 +65,39 @@ def amount_detector(transaction: Transaction):
                     description="Transaction exceeds the expected amount for this merchant.",
                 )
             )
+
+    return findings
+
+def behaviour_detector(transaction):
+
+    findings = []
+
+    customer = transaction.customer_id
+
+    current_total = customer_daily_totals.get(
+        customer,
+        0,
+    )
+
+    new_total = current_total + transaction.amount
+
+    customer_daily_totals[customer] = new_total
+
+    if new_total > 500:
+
+        findings.append(
+
+            Finding(
+                detector="Behaviour",
+                severity="Medium",
+                title="High Daily Spend",
+                description=(
+                    f"Customer has spent "
+                    f"{new_total:.2f} today."
+                ),
+            )
+
+        )
 
     return findings
 
@@ -129,6 +168,10 @@ def assess_transaction(transaction: Transaction):
 
     findings.extend(
         amount_detector(transaction)
+    )
+
+    findings.extend(
+    behaviour_detector(transaction)
     )
 
     decision = make_decision(findings)

@@ -22,7 +22,7 @@ TIME_STEP_MINUTES = 1
 
 CUSTOMERS = [
     f"CUST-{i:04d}"
-    for i in range(1, 1001)
+    for i in range(1, 51)
 ]
 
 # -----------------------------
@@ -233,7 +233,7 @@ MERCHANTS = {
         "countries": ["KP"],
         "amount_range": (1000, 5000),
         "expected_max_amount": 1000,
-        "weight": 0,
+        "weight": 1,
         "busy_hours": range(0, 24),
         "high_risk": True,
     },
@@ -282,61 +282,46 @@ def pick_merchant():
 # Transaction Generation
 # --------------------------------------------------
 
-def generate_transaction():
+ANOMALY_RATE = 0.05
+
+def advance_clock():
     global simulation_time
-
-    merchant_name = pick_merchant()
-    merchant = MERCHANTS[merchant_name]
-
-    # -------------------------
-    # Advance simulation clock
-    # -------------------------
     simulation_time += timedelta(minutes=TIME_STEP_MINUTES)
+    return simulation_time
 
-    hour = simulation_time.hour
 
-    # -------------------------
-    # Pick customer
-    # -------------------------
-    customer_id = random.choice(CUSTOMERS)
+def build_transaction(merchant_name, customer_id, country, amount):
+    merchant=MERCHANTS[merchant_name]
+    current_time=advance_clock()
+    return Transaction(transaction_id=str(uuid.uuid4()),timestamp=current_time.isoformat(),merchant=merchant_name,country=country,amount=round(amount,2),customer_id=customer_id,merchant_category=merchant['category'],simulation_day=(current_time-SIMULATION_START).days,simulation_hour=current_time.hour)
 
-    # -------------------------
-    # Country logic (merchant constrained)
-    # -------------------------
-    country = random.choice(merchant["countries"])
 
-    # -------------------------
-    # Amount logic (merchant behaviour)
-    # -------------------------
-    min_amt, max_amt = merchant["amount_range"]
+def generate_normal_transaction():
+    merchant_name=pick_merchant(); merchant=MERCHANTS[merchant_name]
+    customer_id=random.choice(CUSTOMERS)
+    country=random.choice(merchant['countries'])
+    min_amt,max_amt=merchant['amount_range']
+    amount=random.uniform(min_amt,max_amt)*random.uniform(0.85,1.15)
+    if simulation_time.hour in merchant['busy_hours']:
+        amount*=random.uniform(1.0,1.2)
+    return build_transaction(merchant_name,customer_id,country,amount)
 
-    base_amount = random.uniform(min_amt, max_amt)
 
-    # small realism noise
-    noise = random.uniform(0.85, 1.15)
+def generate_anomalous_transaction():
+    anomaly=random.choice(['high_risk_merchant','sanctioned_country','large_amount'])
+    tx=generate_normal_transaction()
+    if anomaly=='high_risk_merchant':
+        candidates=[m for m,v in MERCHANTS.items() if v['high_risk']]
+        merchant_name=random.choice(candidates); merchant=MERCHANTS[merchant_name]
+        return build_transaction(merchant_name,tx.customer_id,random.choice(merchant['countries']),random.uniform(*merchant['amount_range']))
+    if anomaly=='sanctioned_country':
+        tx.country=random.choice(list(SANCTIONED_COUNTRIES)); return tx
+    merchant=MERCHANTS[tx.merchant]
+    tx.amount=round(merchant['expected_max_amount']*random.uniform(1.4,2.2),2)
+    return tx
 
-    amount = round(base_amount * noise, 2)
 
-    # -------------------------
-    # Time-of-day boost (simulate busy hours)
-    # -------------------------
-    if hour in merchant["busy_hours"]:
-        amount *= random.uniform(1.0, 1.2)
-
-    amount = round(amount, 2)
-
-    # -------------------------
-    # Build transaction
-    # -------------------------
-    return Transaction(
-        transaction_id=str(uuid.uuid4()),
-        timestamp=simulation_time.isoformat(),
-        merchant=merchant_name,
-        country=country,
-        amount=amount,
-
-        customer_id=customer_id,
-        merchant_category=merchant["category"],
-        simulation_day=(simulation_time - SIMULATION_START).days,
-        simulation_hour=hour,
-    )
+def generate_transaction():
+    if random.random()<ANOMALY_RATE:
+        return generate_anomalous_transaction()
+    return generate_normal_transaction()

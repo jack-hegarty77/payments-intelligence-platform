@@ -22,7 +22,7 @@ TIME_STEP_MINUTES = 1
 
 CUSTOMERS = [
     f"CUST-{i:04d}"
-    for i in range(1, 51)
+    for i in range(1, 701)
 ]
 
 # -----------------------------
@@ -233,7 +233,7 @@ MERCHANTS = {
         "countries": ["KP"],
         "amount_range": (1000, 5000),
         "expected_max_amount": 1000,
-        "weight": 1,
+        "weight": 0,
         "busy_hours": range(0, 24),
         "high_risk": True,
     },

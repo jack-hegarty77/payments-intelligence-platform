@@ -2,8 +2,10 @@ import { useEffect, useState } from "react";
 import "./App.css";
 
 function formatText(text) {
-  return text
-    .split("_")
+  return String(text)
+    .replace(/[_-]+/g, " ")
+    .split(" ")
+    .filter(Boolean)
     .map(
       (word) =>
         word.charAt(0).toUpperCase() +
@@ -12,328 +14,396 @@ function formatText(text) {
     .join(" ");
 }
 
+function getDisplayStatus(tx) {
+  return tx.decision || tx.status || "APPROVED";
+}
+
 function getPrimaryReason(tx) {
-  if (tx.alerts.includes("sanctioned_country")) {
+  if (tx.primary_reason) {
+    return tx.primary_reason;
+  }
+
+  if (tx.alerts?.includes("sanctioned_country")) {
     return "Sanctioned Country";
   }
 
-  if (tx.alerts.includes("high_risk_merchant")) {
+  if (tx.alerts?.includes("high_risk_merchant")) {
     return "High Risk Merchant";
   }
 
-  if (
-    tx.alerts.includes(
-      "unusual_transaction_amount"
-    )
-  ) {
+  if (tx.alerts?.includes("unusual_transaction_amount")) {
     return "Unusual Transaction Amount";
+  }
+
+  if (tx.alerts?.length) {
+    return formatText(tx.alerts[0]);
   }
 
   return "Under Investigation";
 }
 
+function getTickerClass(tx) {
+  const status = getDisplayStatus(tx);
+
+  switch (status) {
+    case "BLOCKED":
+      return "ticker-card blocked";
+    case "REVIEW":
+      return "ticker-card review";
+    case "MONITOR":
+      return "ticker-card monitor";
+    case "NOTIFY":
+      return "ticker-card notify";
+    default:
+      return "ticker-card approved";
+  }
+}
+
 export default function App() {
-  const [transactions, setTransactions] =
-    useState([]);
+  const [transactions, setTransactions] = useState([]);
+  const [selectedTransaction, setSelectedTransaction] =
+    useState(null);
+  const [connected, setConnected] = useState(false);
+  const [statusMessage, setStatusMessage] =
+    useState("Connecting to live feed...");
+  const [errorMessage, setErrorMessage] = useState("");
 
-  const [
-    selectedTransaction,
-    setSelectedTransaction,
-  ] = useState(null);
+  useEffect(() => {
+    async function loadInitial() {
+      try {
+        const response = await fetch(
+          "http://127.0.0.1:8000/transactions/live"
+        );
+        if (!response.ok) {
+          throw new Error("Failed to load live transactions");
+        }
 
-useEffect(() => {
-  const socket = new WebSocket(
-    "ws://127.0.0.1:8000/ws/transactions"
+        const data = await response.json();
+        setTransactions(data || []);
+      } catch (error) {
+        setErrorMessage(
+          "Unable to load recent transactions."
+        );
+      }
+    }
+
+    loadInitial();
+
+    const socket = new WebSocket(
+      "ws://127.0.0.1:8000/ws/transactions"
+    );
+
+    socket.onopen = () => {
+      setConnected(true);
+      setStatusMessage("Live stream connected");
+      setErrorMessage("");
+    };
+
+    socket.onmessage = (event) => {
+      const tx = JSON.parse(event.data);
+      setTransactions((prev) => [...prev, tx].slice(-100));
+    };
+
+    socket.onerror = () => {
+      setConnected(false);
+      setStatusMessage("Live feed interrupted");
+      setErrorMessage("WebSocket connection error.");
+    };
+
+    socket.onclose = () => {
+      setConnected(false);
+      setStatusMessage("Live feed disconnected");
+    };
+
+    return () => socket.close();
+  }, []);
+
+  const recentTransactions = [...transactions].reverse();
+  const tickerTransactions = recentTransactions.slice(0, 30);
+  const monitorTransactions = recentTransactions.filter(
+    (tx) => getDisplayStatus(tx) === "MONITOR"
+  );
+  const escalationTransactions = recentTransactions.filter((tx) =>
+    ["REVIEW", "BLOCKED", "NOTIFY"].includes(
+      getDisplayStatus(tx)
+    )
   );
 
-  socket.onopen = () => {
-    console.log("WebSocket connected");
-  };
-
-  socket.onmessage = (event) => {
-    const tx = JSON.parse(event.data);
-
-    setTransactions((prev) => {
-      const updated = [...prev, tx];
-
-      return updated.slice(-100); // keep memory bounded
-    });
-  };
-
-  socket.onerror = (error) => {
-    console.error("WebSocket error:", error);
-  };
-
-  socket.onclose = () => {
-    console.log("WebSocket disconnected");
-  };
-
-  return () => socket.close();
-}, []);
-
-  const approvedTransactions = transactions
-    .filter((tx) => tx.status === "APPROVED")
-    .slice(-10)
-    .reverse();
-
-  const tickerTransactions = transactions
-    .slice(-30)
-    .reverse();
-
-  const riskyTransactions = transactions
-    .filter(
-      (tx) =>
-        tx.status === "REVIEW" ||
-        tx.status === "BLOCKED"
-    )
-    .reverse();
-
-  const counts = {
-    APPROVED: transactions.filter(
-      (t) => t.status === "APPROVED"
-    ).length,
-    MONITOR: transactions.filter(
-      (t) => t.status === "MONITOR"
-    ).length,
-    NOTIFY: transactions.filter(
-      (t) => t.status === "NOTIFY"
-    ).length,
-    REVIEW: transactions.filter(
-      (t) => t.status === "REVIEW"
-    ).length,
-    BLOCKED: transactions.filter(
-      (t) => t.status === "BLOCKED"
-    ).length,
-  };
-
-  function getTickerClass(tx) {
-    switch (tx.status) {
-      case "BLOCKED":
-        return "ticker-card blocked";
-
-      case "REVIEW":
-        return "ticker-card review";
-
-      case "MONITOR":
-        return "ticker-card monitor";
-
-      default:
-        return "ticker-card approved";
+  const counts = transactions.reduce(
+    (acc, tx) => {
+      const status = getDisplayStatus(tx);
+      acc[status] = (acc[status] || 0) + 1;
+      return acc;
+    },
+    {
+      APPROVED: 0,
+      MONITOR: 0,
+      NOTIFY: 0,
+      REVIEW: 0,
+      BLOCKED: 0,
     }
-  }
+  );
+
+  const summaryCards = [
+    { label: "Approved", value: counts.APPROVED, tone: "approved" },
+    { label: "Monitor", value: counts.MONITOR, tone: "monitor" },
+    { label: "Notify", value: counts.NOTIFY, tone: "notify" },
+    { label: "Review", value: counts.REVIEW, tone: "review" },
+    { label: "Blocked", value: counts.BLOCKED, tone: "blocked" },
+  ];
 
   return (
     <div className="dashboard">
       <header className="header">
-        <h1>
-          Payments Intelligence Platform
-        </h1>
+        <div className="header-row">
+          <div>
+            <h1>Payments Intelligence Platform</h1>
+            <p className="subtitle">
+              Real-time payment monitoring, risk alerts,
+              and investigator tools in one dashboard.
+            </p>
+          </div>
+
+          <div className="connection-panel">
+            <span
+              className={`connection-pill ${
+                connected ? "connected" : "offline"
+              }`}
+            >
+              <span className="pulse" />
+              {connected ? "Live" : "Offline"}
+            </span>
+            <p className="connection-text">
+              {statusMessage}
+              {errorMessage ? ` • ${errorMessage}` : ""}
+            </p>
+          </div>
+        </div>
       </header>
 
-      <div className="ticker-container">
-
-        <div className="ticker-track">
-
-          {tickerTransactions.map((tx) => (
-
-            <div
-              key={tx.transaction_id}
-              className={getTickerClass(tx)}
-            >
-
-              <strong>
-                {tx.timestamp.slice(11,16)}
-              </strong>
-
-              <span>
-                {tx.customer_id}
-              </span>
-
-              <span>
-                {tx.merchant}
-              </span>
-
-              <span>
-                €{tx.amount}
-              </span>
-
-            </div>
-
-          ))}
-
-        </div>
-
-      </div>
-
-      {/* SUMMARY */}
-      <div className="summary-grid">
-        <div className="summary-card">
-          <h2>{counts.APPROVED}</h2>
-          <p>Approved</p>
-        </div>
-
-        <div className="summary-card">
-          <h2>{counts.MONITOR}</h2>
-          <p>Monitor</p>
-        </div>
-
-        <div className="summary-card">
-          <h2>{counts.NOTIFY}</h2>
-          <p>Notify</p>
-        </div>
-
-        <div className="summary-card">
-          <h2>{counts.REVIEW}</h2>
-          <p>Review</p>
-        </div>
-
-        <div className="summary-card blocked-tile">
-          <h2>{counts.BLOCKED}</h2>
-          <p>Blocked</p>
-        </div>
-      </div>
-
-      {/* MAIN GRID */}
-      <div className="content-grid">
-
-        {/* APPROVED */}
-        <section className="panel">
-          <h2>✅ Approved Feed</h2>
-
-          {approvedTransactions.map((tx) => (
-            <div
-              key={tx.transaction_id}
-              className="approved-card"
-            >
-              <strong>{tx.merchant}</strong>
-              <p>
-                €{tx.amount} · {tx.country}
-              </p>
-            </div>
-          ))}
-        </section>
-
-        {/* RISK QUEUE */}
-        <section className="panel risk-panel">
-          <h2>🚨 Risk Queue</h2>
-
-          {riskyTransactions.map((tx) => (
-            <div
-              key={tx.transaction_id}
-              className="risk-card"
-              onClick={() =>
-                setSelectedTransaction(tx)
-              }
-            >
-              <div className="risk-card-header">
-                <h3>{tx.merchant}</h3>
-
-                <span
-                  className={`status-badge ${tx.status.toLowerCase()}`}
+      <section className="ticker-container">
+        {tickerTransactions.length > 0 ? (
+          <div className="ticker-track">
+            {[...tickerTransactions, ...tickerTransactions].map(
+              (tx, index) => (
+                <div
+                  key={`${tx.transaction_id}-${index}`}
+                  className={getTickerClass(tx)}
                 >
-                  {tx.status}
-                </span>
-              </div>
+                  <span className="ticker-time">
+                    {tx.timestamp?.slice(11, 16) || "--:--"}
+                  </span>
+                  <span>{tx.customer_id}</span>
+                  <span>{tx.merchant}</span>
+                  <span>€{tx.amount.toFixed(2)}</span>
+                </div>
+              )
+            )}
+          </div>
+        ) : (
+          <div className="ticker-empty">
+            Waiting for live transactions...
+          </div>
+        )}
+      </section>
 
-              <p>
-                €{tx.amount} · {tx.country}
-              </p>
+      <div className="summary-grid">
+        {summaryCards.map((card) => (
+          <div
+            key={card.label}
+            className={`summary-card ${card.tone}`}
+          >
+            <p className="summary-label">{card.label}</p>
+            <h2>{card.value}</h2>
+          </div>
+        ))}
+      </div>
 
-              <p className="primary-reason">
-                {getPrimaryReason(tx)}
-              </p>
+      <div className="investigation-grid">
+        <section className="panel panel-monitor">
+          <div className="panel-heading">
+            <div>
+              <p className="panel-eyebrow">Monitoring queue</p>
+              <h2>Monitor alerts</h2>
             </div>
-          ))}
+            <span className="panel-pill monitor-pill">
+              {monitorTransactions.length} active
+            </span>
+          </div>
+          <p className="panel-copy">
+            Transactions requiring additional observation before a final disposition.
+          </p>
+          {monitorTransactions.length > 0 ? (
+            monitorTransactions.slice(0, 8).map((tx) => (
+              <div
+                key={tx.transaction_id}
+                className="investigation-card monitor-card"
+                onClick={() => setSelectedTransaction(tx)}
+              >
+                <div className="investigation-card-top">
+                  <div>
+                    <h3>{tx.merchant}</h3>
+                    <p className="muted-text">
+                      {tx.country} · {tx.customer_id}
+                    </p>
+                  </div>
+                  <span className="status-badge monitor">Monitor</span>
+                </div>
+                <div className="investigation-card-body">
+                  <p className="risk-amount">€{tx.amount.toFixed(2)}</p>
+                  <p className="primary-reason">{getPrimaryReason(tx)}</p>
+                </div>
+                <div className="risk-meta">
+                  <span>Risk score {tx.risk_score ?? "—"}</span>
+                  <span>{tx.timestamp?.slice(11, 16) || "—"}</span>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="empty-state">
+              No monitor alerts pending.
+            </div>
+          )}
         </section>
 
-        {/* SUMMARY PANEL */}
-        <section className="panel">
-          <h2>📊 Alert Summary</h2>
-
-          <p>
-            Monitoring active across all
-            incoming payments.
+        <section className="panel panel-escalation">
+          <div className="panel-heading">
+            <div>
+              <p className="panel-eyebrow">Escalation lane</p>
+              <h2>Review and blocked</h2>
+            </div>
+            <span className="panel-pill escalation-pill">
+              {escalationTransactions.length} needs attention
+            </span>
+          </div>
+          <p className="panel-copy">
+            High-priority cases that require analyst review or immediate blocking.
           </p>
-
-          <p>
-            Click a risk alert to investigate.
-          </p>
+          {escalationTransactions.length > 0 ? (
+            escalationTransactions.slice(0, 8).map((tx) => (
+              <div
+                key={tx.transaction_id}
+                className="investigation-card escalation-card"
+                onClick={() => setSelectedTransaction(tx)}
+              >
+                <div className="investigation-card-top">
+                  <div>
+                    <h3>{tx.merchant}</h3>
+                    <p className="muted-text">
+                      {tx.country} · {tx.customer_id}
+                    </p>
+                  </div>
+                  <span
+                    className={`status-badge ${
+                      getDisplayStatus(tx).toLowerCase()
+                    }`}
+                  >
+                    {getDisplayStatus(tx)}
+                  </span>
+                </div>
+                <div className="investigation-card-body">
+                  <p className="risk-amount">€{tx.amount.toFixed(2)}</p>
+                  <p className="primary-reason">{getPrimaryReason(tx)}</p>
+                </div>
+                <div className="risk-meta">
+                  <span>Risk score {tx.risk_score ?? "—"}</span>
+                  <span>{tx.timestamp?.slice(11, 16) || "—"}</span>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="empty-state">
+              No escalations in the queue.
+            </div>
+          )}
         </section>
       </div>
 
-      {/* MODAL */}
       {selectedTransaction && (
         <div
           className="modal-overlay"
-          onClick={() =>
-            setSelectedTransaction(null)
-          }
+          onClick={() => setSelectedTransaction(null)}
         >
           <div
             className="modal"
-            onClick={(e) =>
-              e.stopPropagation()
-            }
+            onClick={(event) => event.stopPropagation()}
           >
-            <h2>
-              Transaction Investigation
-            </h2>
+            <div className="modal-header">
+              <div>
+                <h2>Transaction Investigation</h2>
+                <p className="muted-text">
+                  {selectedTransaction.transaction_id}
+                </p>
+              </div>
+              <button
+                className="close-button"
+                onClick={() => setSelectedTransaction(null)}
+              >
+                Close
+              </button>
+            </div>
 
-            <p>
-              <strong>Merchant:</strong>{" "}
-              {
-                selectedTransaction.merchant
-              }
-            </p>
+            <div className="modal-grid">
+              <div>
+                <p>
+                  <strong>Merchant:</strong> {selectedTransaction.merchant}
+                </p>
+                <p>
+                  <strong>Amount:</strong> €{selectedTransaction.amount.toFixed(2)}
+                </p>
+                <p>
+                  <strong>Country:</strong> {selectedTransaction.country}
+                </p>
+                <p>
+                  <strong>Status:</strong> {getDisplayStatus(selectedTransaction)}
+                </p>
+              </div>
 
-            <p>
-              <strong>Amount:</strong> €
-              {selectedTransaction.amount}
-            </p>
+              <div>
+                <p>
+                  <strong>Customer:</strong> {selectedTransaction.customer_id}
+                </p>
+                <p>
+                  <strong>Category:</strong> {selectedTransaction.merchant_category}
+                </p>
+                <p>
+                  <strong>Risk score:</strong> {selectedTransaction.risk_score ?? "—"}
+                </p>
+                <p>
+                  <strong>Captured:</strong> {selectedTransaction.timestamp}
+                </p>
+              </div>
+            </div>
 
-            <p>
-              <strong>Country:</strong>{" "}
-              {
-                selectedTransaction.country
-              }
-            </p>
+            <div className="detail-section">
+              <h3>Alerts</h3>
+              <ul>
+                {selectedTransaction.findings?.length > 0 ? (
+                  selectedTransaction.findings.map((finding) => (
+                    <li key={finding.title}>
+                      <strong>{finding.title}:</strong> {finding.description}
+                    </li>
+                  ))
+                ) : (
+                  selectedTransaction.alerts.map((alert) => (
+                    <li key={alert}>{formatText(alert)}</li>
+                  ))
+                )}
+              </ul>
+            </div>
 
-            <p>
-              <strong>Status:</strong>{" "}
-              {
-                selectedTransaction.status
-              }
-            </p>
-
-            <h3>Alerts</h3>
-            <ul>
-              {selectedTransaction.alerts.map(
-                (a) => (
-                  <li key={a}>
-                    {formatText(a)}
-                  </li>
-                )
-              )}
-            </ul>
-
-            <h3>Actions</h3>
-            <ul>
-              {selectedTransaction.actions.map(
-                (a) => (
-                  <li key={a}>
-                    {formatText(a)}
-                  </li>
-                )
-              )}
-            </ul>
-
-            <button
-              onClick={() =>
-                setSelectedTransaction(null)
-              }
-            >
-              Close
-            </button>
+            <div className="detail-section">
+              <h3>Actions</h3>
+              <ul>
+                {selectedTransaction.actions.length > 0 ? (
+                  selectedTransaction.actions.map((action) => (
+                    <li key={action}>{formatText(action)}</li>
+                  ))
+                ) : (
+                  <li>No recommended actions</li>
+                )}
+              </ul>
+            </div>
           </div>
         </div>
       )}

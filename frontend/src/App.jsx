@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useRef } from "react";
 import "./App.css";
 
 function formatText(text) {
@@ -63,6 +64,8 @@ export default function App() {
   const [transactions, setTransactions] = useState([]);
   const [selectedTransaction, setSelectedTransaction] =
     useState(null);
+  const [selectedCustomer, setSelectedCustomer] = useState(null);
+  const [selectedCustomerTxs, setSelectedCustomerTxs] = useState([]);
   const [connected, setConnected] = useState(false);
   const [statusMessage, setStatusMessage] =
     useState("Connecting to live feed...");
@@ -144,13 +147,32 @@ export default function App() {
     }
   );
 
-  const summaryCards = [
-    { label: "Approved", value: counts.APPROVED, tone: "approved" },
-    { label: "Monitor", value: counts.MONITOR, tone: "monitor" },
-    { label: "Notify", value: counts.NOTIFY, tone: "notify" },
-    { label: "Review", value: counts.REVIEW, tone: "review" },
-    { label: "Blocked", value: counts.BLOCKED, tone: "blocked" },
-  ];
+  // latest transaction for simulated time
+  const latestTx = recentTransactions[0] || null;
+
+  function groupByCustomer(list) {
+    const map = {};
+    (list || []).forEach((tx) => {
+      const cid = tx.customer_id || "unknown";
+      if (!map[cid]) map[cid] = [];
+      map[cid].push(tx);
+    });
+
+    const groups = Object.keys(map).map((cid) => {
+      const txs = map[cid].sort((a, b) => (b.timestamp || "").localeCompare(a.timestamp || ""));
+      const count = txs.length;
+      const total = txs.reduce((s, t) => s + (t.amount || 0), 0);
+      const lastSeen = txs[0]?.timestamp || "";
+      const riskCount = txs.filter((t) => (t.findings?.length || t.alerts?.length)).length;
+      return { customer_id: cid, txs, count, total, lastSeen, riskCount };
+    });
+
+    groups.sort((a, b) => b.riskCount - a.riskCount || (b.lastSeen || "").localeCompare(a.lastSeen || ""));
+    return groups;
+  }
+
+  const monitorCustomers = groupByCustomer(monitorTransactions);
+  const escalationCustomers = groupByCustomer(escalationTransactions);
 
   return (
     <div className="dashboard">
@@ -183,40 +205,22 @@ export default function App() {
 
       <section className="ticker-container">
         {tickerTransactions.length > 0 ? (
-          <div className="ticker-track">
-            {[...tickerTransactions, ...tickerTransactions].map(
-              (tx, index) => (
-                <div
-                  key={`${tx.transaction_id}-${index}`}
-                  className={getTickerClass(tx)}
-                >
-                  <span className="ticker-time">
-                    {tx.timestamp?.slice(11, 16) || "--:--"}
-                  </span>
-                  <span>{tx.customer_id}</span>
-                  <span>{tx.merchant}</span>
-                  <span>€{tx.amount.toFixed(2)}</span>
-                </div>
-              )
-            )}
-          </div>
+          <Marquee items={tickerTransactions} getClass={getTickerClass} />
         ) : (
-          <div className="ticker-empty">
-            Waiting for live transactions...
-          </div>
+          <div className="ticker-empty">Waiting for live transactions...</div>
         )}
       </section>
 
-      <div className="summary-grid">
-        {summaryCards.map((card) => (
-          <div
-            key={card.label}
-            className={`summary-card ${card.tone}`}
-          >
-            <p className="summary-label">{card.label}</p>
-            <h2>{card.value}</h2>
-          </div>
-        ))}
+      <div className="simulated-time-bar">
+        <div className="sim-time">
+          {latestTx ? (
+            <>
+              Simulated time — Day {latestTx.simulation_day} · {latestTx.timestamp?.slice(11,16)}
+            </>
+          ) : (
+            <>Simulated time — —</>
+          )}
+        </div>
       </div>
 
       <div className="investigation-grid">
@@ -233,29 +237,26 @@ export default function App() {
           <p className="panel-copy">
             Transactions requiring additional observation before a final disposition.
           </p>
-          {monitorTransactions.length > 0 ? (
-            monitorTransactions.slice(0, 8).map((tx) => (
+          {monitorCustomers.length > 0 ? (
+            monitorCustomers.slice(0, 10).map((c) => (
               <div
-                key={tx.transaction_id}
+                key={c.customer_id}
                 className="investigation-card monitor-card"
-                onClick={() => setSelectedTransaction(tx)}
+                onClick={() => {
+                  setSelectedCustomer(c);
+                  setSelectedCustomerTxs(c.txs);
+                }}
               >
                 <div className="investigation-card-top">
                   <div>
-                    <h3>{tx.merchant}</h3>
-                    <p className="muted-text">
-                      {tx.country} · {tx.customer_id}
-                    </p>
+                    <h3>{c.customer_id}</h3>
+                    <p className="muted-text">{c.count} transactions · €{c.total.toFixed(2)}</p>
                   </div>
-                  <span className="status-badge monitor">Monitor</span>
+                  <span className="panel-pill monitor-pill">{c.riskCount} alerts</span>
                 </div>
                 <div className="investigation-card-body">
-                  <p className="risk-amount">€{tx.amount.toFixed(2)}</p>
-                  <p className="primary-reason">{getPrimaryReason(tx)}</p>
-                </div>
-                <div className="risk-meta">
-                  <span>Risk score {tx.risk_score ?? "—"}</span>
-                  <span>{tx.timestamp?.slice(11, 16) || "—"}</span>
+                  <p className="primary-reason">{c.txs[0] ? getPrimaryReason(c.txs[0]) : ''}</p>
+                  <p className="muted-text">Last: {c.lastSeen?.slice(11,16) || '—'}</p>
                 </div>
               </div>
             ))
@@ -279,35 +280,26 @@ export default function App() {
           <p className="panel-copy">
             High-priority cases that require analyst review or immediate blocking.
           </p>
-          {escalationTransactions.length > 0 ? (
-            escalationTransactions.slice(0, 8).map((tx) => (
+          {escalationCustomers.length > 0 ? (
+            escalationCustomers.slice(0, 10).map((c) => (
               <div
-                key={tx.transaction_id}
+                key={c.customer_id}
                 className="investigation-card escalation-card"
-                onClick={() => setSelectedTransaction(tx)}
+                onClick={() => {
+                  setSelectedCustomer(c);
+                  setSelectedCustomerTxs(c.txs);
+                }}
               >
                 <div className="investigation-card-top">
                   <div>
-                    <h3>{tx.merchant}</h3>
-                    <p className="muted-text">
-                      {tx.country} · {tx.customer_id}
-                    </p>
+                    <h3>{c.customer_id}</h3>
+                    <p className="muted-text">{c.count} transactions · €{c.total.toFixed(2)}</p>
                   </div>
-                  <span
-                    className={`status-badge ${
-                      getDisplayStatus(tx).toLowerCase()
-                    }`}
-                  >
-                    {getDisplayStatus(tx)}
-                  </span>
+                  <span className={`panel-pill escalation-pill`}>{c.riskCount} alerts</span>
                 </div>
                 <div className="investigation-card-body">
-                  <p className="risk-amount">€{tx.amount.toFixed(2)}</p>
-                  <p className="primary-reason">{getPrimaryReason(tx)}</p>
-                </div>
-                <div className="risk-meta">
-                  <span>Risk score {tx.risk_score ?? "—"}</span>
-                  <span>{tx.timestamp?.slice(11, 16) || "—"}</span>
+                  <p className="primary-reason">{c.txs[0] ? getPrimaryReason(c.txs[0]) : ''}</p>
+                  <p className="muted-text">Last: {c.lastSeen?.slice(11,16) || '—'}</p>
                 </div>
               </div>
             ))
@@ -407,6 +399,129 @@ export default function App() {
           </div>
         </div>
       )}
+      {selectedCustomer && (
+        <div
+          className="modal-overlay"
+          onClick={() => setSelectedCustomer(null)}
+        >
+          <div
+            className="modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div>
+                <h2>Customer Investigation</h2>
+                <p className="muted-text">{selectedCustomer.customer_id}</p>
+              </div>
+              <button
+                className="close-button"
+                onClick={() => setSelectedCustomer(null)}
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="detail-section">
+              <h3>Transactions (latest)</h3>
+              <ul className="tx-history-list">
+                {selectedCustomerTxs.map((tx) => (
+                  <li key={tx.transaction_id} className={(tx.findings?.length || tx.alerts?.length) ? 'suspicious' : 'normal'}>
+                    <div className="tx-row">
+                      <div>
+                        <strong>{tx.merchant}</strong>
+                        <div className="muted-text">{tx.timestamp?.slice(11,16)} · {tx.country}</div>
+                      </div>
+                      <div>
+                        <div>€{tx.amount.toFixed(2)}</div>
+                        <div className="status-badge">{getDisplayStatus(tx)}</div>
+                      </div>
+                    </div>
+                    {(tx.findings?.length > 0)
+                      ? tx.findings.map((f) => (
+                          <div key={f.title} className="finding"><strong>{f.title}:</strong> {f.description}</div>
+                        ))
+                      : tx.alerts?.map((a) => <div key={a} className="finding">{formatText(a)}</div>)}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Marquee({ items, getClass }) {
+  const trackRef = useRef(null);
+  const offsetRef = useRef(0);
+  const frameRef = useRef(null);
+  const singleWidthRef = useRef(0);
+
+  useEffect(() => {
+    const track = trackRef.current;
+    if (!track) return;
+
+    // measure single content width (we duplicate items)
+    singleWidthRef.current = track.scrollWidth / 2 || 0;
+
+    // if the content is shorter than the viewport, don't animate — keep static
+    const viewportWidth = track.parentElement?.clientWidth || 0;
+    if (singleWidthRef.current <= viewportWidth) {
+      offsetRef.current = 0;
+      track.style.transform = `translateX(0)`;
+      return;
+    }
+
+    // ensure offset is within the new width to avoid visible jumps on items change
+    if (singleWidthRef.current > 0) {
+      offsetRef.current = offsetRef.current % singleWidthRef.current;
+    } else {
+      offsetRef.current = 0;
+    }
+
+    let lastTime = performance.now();
+    const speed = 60; // pixels per second
+
+    function step(now) {
+      const dt = (now - lastTime) / 1000;
+      lastTime = now;
+      offsetRef.current += speed * dt;
+      if (singleWidthRef.current > 0 && offsetRef.current >= singleWidthRef.current) {
+        offsetRef.current -= singleWidthRef.current;
+      }
+      track.style.transform = `translateX(${-offsetRef.current}px)`;
+      frameRef.current = requestAnimationFrame(step);
+    }
+
+    frameRef.current = requestAnimationFrame(step);
+
+    return () => {
+      if (frameRef.current) cancelAnimationFrame(frameRef.current);
+    };
+  }, [items]);
+
+  // render two copies for seamless loop
+  return (
+    <div className="ticker-viewport">
+      <div className="ticker-track" ref={trackRef} style={{transform: 'translateX(0)'}}>
+        {items.map((tx, i) => (
+          <div key={`A-${tx.transaction_id}-${i}`} className={getClass(tx)}>
+            <span className="ticker-time">{tx.timestamp?.slice(11,16) || '--:--'}</span>
+            <span>{tx.customer_id}</span>
+            <span>{tx.merchant}</span>
+            <span>€{tx.amount.toFixed(2)}</span>
+          </div>
+        ))}
+        {items.map((tx, i) => (
+          <div key={`B-${tx.transaction_id}-${i}`} className={getClass(tx)}>
+            <span className="ticker-time">{tx.timestamp?.slice(11,16) || '--:--'}</span>
+            <span>{tx.customer_id}</span>
+            <span>{tx.merchant}</span>
+            <span>€{tx.amount.toFixed(2)}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

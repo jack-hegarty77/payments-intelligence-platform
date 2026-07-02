@@ -99,6 +99,10 @@ def check_payment(payment: Payment):
         merchant=payment.merchant,
         country=payment.country,
         amount=payment.amount,
+        customer_id="manual-check",
+        merchant_category="Unknown",
+        simulation_day=0,
+        simulation_hour=0,
     )
 
     return assess_transaction(

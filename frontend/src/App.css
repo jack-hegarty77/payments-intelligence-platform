@@ -88,11 +88,16 @@ body {
   box-shadow: 0 24px 60px rgba(15, 23, 42, 0.08);
 }
 
+.ticker-viewport {
+  overflow: hidden;
+}
+
 .ticker-track {
   display: flex;
   gap: 14px;
   min-width: max-content;
-  animation: ticker-scroll 28s linear infinite;
+  transform: translateX(0);
+  will-change: transform;
 }
 
 .ticker-empty {
@@ -101,14 +106,7 @@ body {
   padding: 18px 12px;
 }
 
-@keyframes ticker-scroll {
-  from {
-    transform: translateX(0);
-  }
-  to {
-    transform: translateX(-50%);
-  }
-}
+/* JS-driven marquee replaces the CSS keyframes to avoid jumps */
 
 .ticker-card {
   display: inline-flex;
@@ -147,51 +145,22 @@ body {
   min-width: 48px;
 }
 
-.summary-grid {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 16px;
-  margin: 26px 0;
+.simulated-time-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin: 12px 0 22px;
 }
 
-.summary-card {
+.sim-time {
   background: white;
-  padding: 18px 20px;
-  border-radius: 18px;
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
-}
+  padding: 8px 14px;
+  border-radius: 999px;
+  box-shadow: 0 8px 20px rgba(15,23,42,0.06);
+  font-weight: 700;
+  color: #334155;
+  transform: translateX(0);
+  will-change: transform;
 
-.summary-card.approved {
-  border-left: 4px solid #22c55e;
-}
-
-.summary-card.monitor {
-  border-left: 4px solid #f59e0b;
-}
-
-.summary-card.notify {
-  border-left: 4px solid #38bdf8;
-}
-
-.summary-card.review {
-  border-left: 4px solid #fb923c;
-}
-
-.summary-card.blocked {
-  border-left: 4px solid #ef4444;
-}
-
-.summary-label {
-  margin: 0 0 8px;
-  color: #6b7280;
-  font-size: 0.95rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.summary-card h2 {
-  margin: 0;
-  font-size: 2rem;
 }
 
 .investigation-grid {
@@ -201,11 +170,8 @@ body {
 }
 
 .panel {
-  background: white;
-  border-radius: 24px;
-  padding: 24px;
-  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.06);
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  display: block;
+  margin-bottom: 8px;
 }
 
 .panel-heading {
@@ -213,7 +179,6 @@ body {
   justify-content: space-between;
   gap: 16px;
   align-items: flex-start;
-  margin-bottom: 8px;
 }
 
 .panel-eyebrow {
@@ -292,14 +257,34 @@ body {
 
 .muted-text {
   color: #6b7280;
-  margin: 0;
+  margin: 8px 0 0;
   font-size: 0.95rem;
 }
 
-.muted-text {
-  color: #6b7280;
-  margin: 8px 0 0;
-  font-size: 0.95rem;
+.tx-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.tx-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.finding {
+  margin-top: 8px;
+  color: #7f1d1d;
+}
+
+.suspicious {
+  background: linear-gradient(90deg, rgba(254,225,230,0.6), rgba(255,255,255,0));
+  padding: 10px;
+  border-radius: 8px;
 }
 
 .status-badge {

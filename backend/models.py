@@ -28,21 +28,21 @@ class Finding(BaseModel):
 # =====================================================
 
 class Transaction(BaseModel):
-    transaction_id: str
-    timestamp: str
+    transaction_id: str = ""
+    timestamp: str = ""
 
-    merchant: str
-    country: str
-    amount: float
+    merchant: str = ""
+    country: str = ""
+    amount: float = 0.0
 
     # -----------------------------
     # Simulation metadata
     # -----------------------------
-    customer_id: str
-    merchant_category: str
+    customer_id: str = "unknown"
+    merchant_category: str = ""
 
-    simulation_day: int
-    simulation_hour: int
+    simulation_day: int = 0
+    simulation_hour: int = 0
 
     # -----------------------------
     # New risk architecture

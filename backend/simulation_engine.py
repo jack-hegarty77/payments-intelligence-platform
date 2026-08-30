@@ -20,10 +20,19 @@ TIME_STEP_MINUTES = 1
 # Simulation Clock
 # --------------------------------------------------
 
-CUSTOMERS = [
-    f"CUST-{i:04d}"
-    for i in range(1, 701)
-]
+CUSTOMER_COUNT = 100
+
+# Fewer customers but higher activity per customer improves signal
+CUSTOMERS = [f"CUST-{i:04d}" for i in range(1, CUSTOMER_COUNT + 1)]
+
+# Per-customer activity/profile metadata: baseline multiplier and weight
+CUSTOMER_PROFILES = {}
+for i, cid in enumerate(CUSTOMERS, start=1):
+    # heavier tail: few highly active customers, many less active
+    weight = max(1, int((CUSTOMER_COUNT - i) / 6) + 1)
+    # baseline multiplier varies to create distinct spend patterns
+    baseline = 0.6 + (i % 10) * 0.16
+    CUSTOMER_PROFILES[cid] = {"weight": weight, "baseline": baseline}
 
 # -----------------------------
 # Merchant Profiles
@@ -278,11 +287,26 @@ def pick_merchant():
     weights = [MERCHANTS[m]["weight"] for m in merchants]
     return random.choices(merchants, weights=weights, k=1)[0]
 
+
+def pick_customer():
+    customers = CUSTOMER_PROFILES.keys()
+    weights = [CUSTOMER_PROFILES[c]["weight"] for c in customers]
+    return random.choices(list(customers), weights=weights, k=1)[0]
+
 # --------------------------------------------------
 # Transaction Generation
 # --------------------------------------------------
 
-ANOMALY_RATE = 0.05
+ANOMALY_RATE = 0.02
+
+# assign home country and chance to transact abroad
+COMMON_COUNTRIES = ['GB', 'IE', 'US', 'DE', 'FR', 'ES']
+for cid, profile in CUSTOMER_PROFILES.items():
+    # bias home country to GB/IE for most customers
+    home = random.choice(['GB'] * 6 + ['IE'] * 3 + ['US', 'DE', 'FR', 'ES'])
+    profile['home_country'] = home
+    # small probability of choosing a country outside home during normal transactions
+    profile['country_switch_prob'] = 0.03
 
 def advance_clock():
     global simulation_time
@@ -297,14 +321,34 @@ def build_transaction(merchant_name, customer_id, country, amount):
 
 
 def generate_normal_transaction():
-    merchant_name=pick_merchant(); merchant=MERCHANTS[merchant_name]
-    customer_id=random.choice(CUSTOMERS)
-    country=random.choice(merchant['countries'])
-    min_amt,max_amt=merchant['amount_range']
-    amount=random.uniform(min_amt,max_amt)*random.uniform(0.85,1.15)
+    merchant_name = pick_merchant()
+    merchant = MERCHANTS[merchant_name]
+    customer_id = pick_customer()
+    profile = CUSTOMER_PROFILES.get(customer_id, {})
+
+    # choose country: prefer customer's home country where possible
+    if random.random() < (1 - profile.get('country_switch_prob', 0.03)) and profile.get('home_country') in merchant['countries']:
+        country = profile.get('home_country')
+    else:
+        country = random.choice(merchant['countries'])
+
+    min_amt, max_amt = merchant['amount_range']
+    # pick a base amount within the merchant range
+    base = random.uniform(min_amt, max_amt)
+
+    # apply customer's baseline and small gaussian noise for smoother series
+    profile = CUSTOMER_PROFILES.get(customer_id, {"baseline": 1.0})
+    baseline = profile.get("baseline", 1.0)
+    noise = random.gauss(1.0, 0.08)
+    amount = base * baseline * noise
+
+    # busy hours increase slightly but deterministically
     if simulation_time.hour in merchant['busy_hours']:
-        amount*=random.uniform(1.0,1.2)
-    return build_transaction(merchant_name,customer_id,country,amount)
+        amount *= 1.08
+
+    # clamp amount to reasonable merchant bounds
+    amount = max(min_amt * 0.8, min(amount, max_amt * 1.2))
+    return build_transaction(merchant_name, customer_id, country, amount)
 
 
 def generate_anomalous_transaction():

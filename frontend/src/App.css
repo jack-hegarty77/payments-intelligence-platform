@@ -12,6 +12,26 @@ body {
   padding: 28px 24px 40px;
 }
 
+.top-nav {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.nav-link {
+  background: linear-gradient(180deg,#ffffff,#f3f4f6);
+  border: 1px solid #e6e9ef;
+  padding: 8px 14px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 700;
+  color: #111827;
+}
+
+.nav-link:hover { transform: translateY(-1px); box-shadow: 0 8px 20px rgba(15,23,42,0.06); }
+
+.nav-link.active { background: #111827; color: white; }
+
 .header {
   margin-bottom: 24px;
 }
@@ -348,6 +368,34 @@ body {
   border: 1px dashed #cbd5e1;
   border-radius: 14px;
 }
+
+.customer-card { border-radius: 14px; padding: 16px; background: white; box-shadow: 0 8px 20px rgba(15,23,42,0.04); margin-bottom: 12px; }
+.customer-card-top { display:flex; justify-content:space-between; align-items:center }
+.customer-card-body { display:flex; gap:16px; margin-top:12px; align-items:center }
+.card-stats { display:flex; gap:12px }
+.stat { text-align:center }
+.stat-value { font-weight:800; font-size:1.1rem }
+.stat-label { color:#6b7280; font-size:0.85rem }
+.alerts-summary { margin-left: auto; display:flex; flex-direction:column; gap:8px }
+.alert-row { display:flex; justify-content:space-between; gap:12px }
+
+.visualisations-grid { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px }
+.viz-large { background:#fff; border-radius:12px; padding:8px; box-shadow: 0 8px 20px rgba(15,23,42,0.04); }
+.country-timeline { display:flex; flex-direction:column; gap:8px }
+.country-step { padding:8px; border-radius:8px; background:#f8fafc }
+.country-step.impossible { border-left:4px solid #ef4444; background: linear-gradient(90deg,#fff1f2,#fff); }
+.country { font-weight:700 }
+.ct-flag { color:#b91c1c; font-weight:700; margin-top:6px }
+
+.viz-header { font-weight:800; margin-bottom:8px }
+.mini-tx { display:flex; gap:12px; align-items:center; padding:8px; border-radius:8px; background:#fff; border:1px solid #eef2ff }
+.mini-tx.flagged { border-color:#fecaca; background: linear-gradient(90deg,#fff7f7,#fff) }
+.mini-time { width:56px; color:#6b7280 }
+.mini-amt { font-weight:700 }
+.mini-merchant { flex:1; color:#374151 }
+.mini-country { font-weight:700 }
+
+.impossible-collection { display:flex; gap:8px; align-items:flex-start }
 
 .modal-overlay {
   position: fixed;

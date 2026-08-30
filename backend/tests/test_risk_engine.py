@@ -43,8 +43,10 @@ def test_detects_impossible_travel_between_countries_within_minutes():
 def test_detects_amount_deviation_from_customer_profile():
     reset_state()
 
-    baseline = make_transaction("CUST-0002", "GB", 18.0, "2026-01-05T06:00:00")
-    risk_engine.assess_transaction(baseline)
+    # Seed multiple baseline transactions so a profile is established
+    for i in range(5):
+        t = make_transaction("CUST-0002", "GB", 18.0 + (i * 0.5), f"2026-01-05T06:0{i}:00")
+        risk_engine.assess_transaction(t)
 
     suspicious = make_transaction("CUST-0002", "GB", 550.0, "2026-01-05T06:10:00")
     result = risk_engine.assess_transaction(suspicious)

@@ -117,7 +117,9 @@ def amount_detector(transaction: Transaction):
 
     merchant = MERCHANTS.get(transaction.merchant)
 
-    if merchant and transaction.amount > merchant["expected_max_amount"]:
+    # Be slightly more tolerant to occasional large catalogue items;
+    # require a multiplication factor above the merchant expected maximum.
+    if merchant and transaction.amount > merchant["expected_max_amount"] * 1.5:
         findings.append(
             Finding(
                 detector="Amount",
@@ -162,16 +164,19 @@ def behaviour_detector(transaction: Transaction):
             )
 
     # Spending pattern deviation based on historical customer profile
-    if len(history) >= 1 and profile["average_amount"] > 0:
+    # Require a modest amount of history before flagging spending deviations
+    if len(history) >= 5 and profile["average_amount"] > 0:
         average_amount = profile["average_amount"]
         standard_deviation = profile["amount_stddev"]
+        # Make the deviation detector less sensitive to single outliers
+        # while still catching large deviations from a customer's baseline.
         deviation_threshold = max(
-            average_amount * 2.5,
-            average_amount + max(standard_deviation * 3, 50.0),
+            average_amount * 4.0,
+            average_amount + max(standard_deviation * 4.0, 100.0),
         )
 
         if transaction.amount > deviation_threshold:
-            severity = "High" if transaction.amount > average_amount * 5 else "Medium"
+            severity = "High" if transaction.amount > average_amount * 6 else "Medium"
             findings.append(
                 Finding(
                     detector="Behaviour",
@@ -189,7 +194,8 @@ def behaviour_detector(transaction: Transaction):
     new_total = current_total + transaction.amount
     customer_daily_totals[customer] = new_total
 
-    if new_total > 500:
+    # Increase daily spend guardrail to reduce false positives from active users
+    if new_total > 1000:
         findings.append(
             Finding(
                 detector="Behaviour",

@@ -1,6 +1,5 @@
 import random
 import uuid
-from datetime import datetime
 from datetime import datetime, timedelta
 
 from models import Transaction
@@ -20,19 +19,42 @@ TIME_STEP_MINUTES = 1
 # Simulation Clock
 # --------------------------------------------------
 
-CUSTOMER_COUNT = 100
+CUSTOMER_COUNT = 24
 
 # Fewer customers but higher activity per customer improves signal
 CUSTOMERS = [f"CUST-{i:04d}" for i in range(1, CUSTOMER_COUNT + 1)]
 
-# Per-customer activity/profile metadata: baseline multiplier and weight
+# Per-customer activity/profile metadata
 CUSTOMER_PROFILES = {}
 for i, cid in enumerate(CUSTOMERS, start=1):
-    # heavier tail: few highly active customers, many less active
-    weight = max(1, int((CUSTOMER_COUNT - i) / 6) + 1)
-    # baseline multiplier varies to create distinct spend patterns
-    baseline = 0.6 + (i % 10) * 0.16
-    CUSTOMER_PROFILES[cid] = {"weight": weight, "baseline": baseline}
+    activity_level = ["occasional", "regular", "frequent"][i % 3]
+    min_gap, max_gap = {
+        "occasional": (360, 720),
+        "regular": (120, 360),
+        "frequent": (45, 180),
+    }[activity_level]
+    CUSTOMER_PROFILES[cid] = {
+        "activity_level": activity_level,
+        "weight": 1,
+        "baseline": 0.75 + (i % 8) * 0.12,
+        "daily_limit": 650 + ((i * 137) % 850),
+        "min_gap_minutes": min_gap,
+        "max_gap_minutes": max_gap,
+        "preferred_categories": [
+            ["Groceries", "Coffee", "Transport"],
+            ["Retail", "Food Delivery", "Entertainment"],
+            ["Travel", "Hospitality", "Technology"],
+        ][i % 3],
+        "scenario": {
+            0: "normal",
+            1: "normal",
+            2: "spend_escalation",
+            3: "impossible_travel",
+            4: "account_takeover",
+        }.get(i % 10, "normal"),
+        "transaction_count": 0,
+        "next_transaction_at": None,
+    }
 
 # -----------------------------
 # Merchant Profiles
@@ -297,7 +319,8 @@ def pick_customer():
 # Transaction Generation
 # --------------------------------------------------
 
-ANOMALY_RATE = 0.02
+ANOMALY_RATE = 0.0
+SIMULATION_MINUTES_PER_TICK = 15
 
 # assign home country and chance to transact abroad
 COMMON_COUNTRIES = ['GB', 'IE', 'US', 'DE', 'FR', 'ES']
@@ -307,24 +330,77 @@ for cid, profile in CUSTOMER_PROFILES.items():
     profile['home_country'] = home
     # small probability of choosing a country outside home during normal transactions
     profile['country_switch_prob'] = 0.03
+    profile['next_transaction_at'] = SIMULATION_START + timedelta(
+        minutes=random.randint(0, profile['max_gap_minutes'])
+    )
 
-def advance_clock():
+def advance_clock(minutes=SIMULATION_MINUTES_PER_TICK):
     global simulation_time
-    simulation_time += timedelta(minutes=TIME_STEP_MINUTES)
+    simulation_time += timedelta(minutes=minutes)
     return simulation_time
 
 
-def build_transaction(merchant_name, customer_id, country, amount):
+def build_transaction(merchant_name, customer_id, country, amount, timestamp=None):
     merchant=MERCHANTS[merchant_name]
-    current_time=advance_clock()
+    current_time=timestamp or simulation_time
     return Transaction(transaction_id=str(uuid.uuid4()),timestamp=current_time.isoformat(),merchant=merchant_name,country=country,amount=round(amount,2),customer_id=customer_id,merchant_category=merchant['category'],simulation_day=(current_time-SIMULATION_START).days,simulation_hour=current_time.hour)
 
 
-def generate_normal_transaction():
-    merchant_name = pick_merchant()
+def pick_customer_for_tick():
+    urgent_customers = [
+        customer_id
+        for customer_id, profile in CUSTOMER_PROFILES.items()
+        if profile.get("urgent_next_transaction")
+    ]
+    if urgent_customers:
+        return urgent_customers[0]
+
+    due_customers = [
+        (customer_id, profile)
+        for customer_id, profile in CUSTOMER_PROFILES.items()
+        if profile["next_transaction_at"] <= simulation_time
+    ]
+
+    if due_customers:
+        return random.choice(due_customers)[0]
+
+    return random.choices(
+        list(CUSTOMER_PROFILES),
+        weights=[
+            {"occasional": 1, "regular": 2, "frequent": 4}[profile["activity_level"]]
+            for profile in CUSTOMER_PROFILES.values()
+        ],
+        k=1,
+    )[0]
+
+
+def pick_customer_merchant(profile):
+    preferred = [
+        merchant_name
+        for merchant_name, merchant in MERCHANTS.items()
+        if merchant["category"] in profile["preferred_categories"] and merchant["weight"] > 0
+    ]
+    return random.choice(preferred) if preferred and random.random() < 0.72 else pick_merchant()
+
+
+def schedule_next_transaction(profile, current_time, urgent=False):
+    if urgent:
+        profile["next_transaction_at"] = current_time
+        profile["urgent_next_transaction"] = True
+        return
+
+    profile["urgent_next_transaction"] = False
+    profile["next_transaction_at"] = current_time + timedelta(
+        minutes=random.randint(profile["min_gap_minutes"], profile["max_gap_minutes"])
+    )
+
+
+def generate_normal_transaction(customer_id=None, timestamp=None):
+    current_time = timestamp or simulation_time
+    customer_id = customer_id or pick_customer_for_tick()
+    profile = CUSTOMER_PROFILES[customer_id]
+    merchant_name = pick_customer_merchant(profile)
     merchant = MERCHANTS[merchant_name]
-    customer_id = pick_customer()
-    profile = CUSTOMER_PROFILES.get(customer_id, {})
 
     # choose country: prefer customer's home country where possible
     if random.random() < (1 - profile.get('country_switch_prob', 0.03)) and profile.get('home_country') in merchant['countries']:
@@ -343,29 +419,55 @@ def generate_normal_transaction():
     amount = base * baseline * noise
 
     # busy hours increase slightly but deterministically
-    if simulation_time.hour in merchant['busy_hours']:
+    if current_time.hour in merchant['busy_hours']:
         amount *= 1.08
 
     # clamp amount to reasonable merchant bounds
     amount = max(min_amt * 0.8, min(amount, max_amt * 1.2))
-    return build_transaction(merchant_name, customer_id, country, amount)
+    return build_transaction(merchant_name, customer_id, country, amount, current_time)
 
 
-def generate_anomalous_transaction():
-    anomaly=random.choice(['high_risk_merchant','sanctioned_country','large_amount'])
-    tx=generate_normal_transaction()
-    if anomaly=='high_risk_merchant':
-        candidates=[m for m,v in MERCHANTS.items() if v['high_risk']]
-        merchant_name=random.choice(candidates); merchant=MERCHANTS[merchant_name]
-        return build_transaction(merchant_name,tx.customer_id,random.choice(merchant['countries']),random.uniform(*merchant['amount_range']))
-    if anomaly=='sanctioned_country':
-        tx.country=random.choice(list(SANCTIONED_COUNTRIES)); return tx
-    merchant=MERCHANTS[tx.merchant]
-    tx.amount=round(merchant['expected_max_amount']*random.uniform(1.4,2.2),2)
-    return tx
+def apply_customer_scenario(transaction, profile, current_time):
+    count = profile["transaction_count"]
+    scenario = profile["scenario"]
+
+    # Scenarios begin only after a normal baseline has formed.
+    if count < 12:
+        return transaction
+
+    if scenario == "spend_escalation" and count in (12, 13, 14):
+        transaction.amount = round(transaction.amount * (3 + (count - 12) * 1.5), 2)
+
+    if scenario == "impossible_travel" and count == 12:
+        profile["travel_country"] = random.choice(
+            [country for country in COMMON_COUNTRIES if country != transaction.country]
+        )
+        schedule_next_transaction(profile, current_time, urgent=True)
+
+    if scenario == "impossible_travel" and count == 13:
+        transaction.country = profile.get("travel_country", transaction.country)
+
+    if scenario == "account_takeover" and count in (12, 13):
+        candidates = [merchant for merchant, data in MERCHANTS.items() if data["high_risk"]]
+        merchant_name = random.choice(candidates)
+        merchant = MERCHANTS[merchant_name]
+        transaction.merchant = merchant_name
+        transaction.merchant_category = merchant["category"]
+        transaction.country = random.choice(merchant["countries"])
+        transaction.amount = round(random.uniform(*merchant["amount_range"]), 2)
+
+    return transaction
 
 
 def generate_transaction():
-    if random.random()<ANOMALY_RATE:
-        return generate_anomalous_transaction()
-    return generate_normal_transaction()
+    current_time = advance_clock()
+    customer_id = pick_customer_for_tick()
+    profile = CUSTOMER_PROFILES[customer_id]
+    transaction = generate_normal_transaction(customer_id, current_time)
+    transaction = apply_customer_scenario(transaction, profile, current_time)
+    profile["transaction_count"] += 1
+    if profile["scenario"] == "impossible_travel" and profile["transaction_count"] == 13:
+        schedule_next_transaction(profile, current_time, urgent=True)
+    else:
+        schedule_next_transaction(profile, current_time)
+    return transaction

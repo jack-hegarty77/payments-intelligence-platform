@@ -14,76 +14,13 @@ function formatText(text) {
     )
     .join(" ");
 }
-
-function groupByCustomer(list) {
-  const map = {};
-  (list || []).forEach((tx) => {
-    const cid = tx.customer_id || "unknown";
-    if (!map[cid]) map[cid] = [];
-    map[cid].push(tx);
-  });
-
-  const groups = Object.keys(map).map((cid) => {
-    const txs = map[cid].sort((a, b) => (b.timestamp || "").localeCompare(a.timestamp || ""));
-    const count = txs.length;
-    const total = txs.reduce((s, t) => s + (t.amount || 0), 0);
-    const lastSeen = txs[0]?.timestamp || "";
-    const riskCount = txs.filter((t) => (t.findings?.length || t.alerts?.length)).length;
-    return { customer_id: cid, txs, count, total, lastSeen, riskCount };
-  });
-
-  groups.sort((a, b) => b.riskCount - a.riskCount || (b.lastSeen || "").localeCompare(a.lastSeen || ""));
-  return groups;
-}
-
 function getDisplayStatus(tx) {
   return tx.decision || tx.status || "APPROVED";
 }
 
-function getPrimaryReason(tx) {
-  if (tx.primary_reason) {
-    return tx.primary_reason;
-  }
-
-  if (tx.alerts?.includes("sanctioned_country")) {
-    return "Sanctioned Country";
-  }
-
-  if (tx.alerts?.includes("high_risk_merchant")) {
-    return "High Risk Merchant";
-  }
-
-  if (tx.alerts?.includes("unusual_transaction_amount")) {
-    return "Unusual Transaction Amount";
-  }
-
-  if (tx.alerts?.length) {
-    return formatText(tx.alerts[0]);
-  }
-
-  return "Under Investigation";
-}
-
-function getTickerClass(tx) {
-  const status = getDisplayStatus(tx);
-
-  switch (status) {
-    case "BLOCKED":
-      return "ticker-card blocked";
-    case "REVIEW":
-      return "ticker-card review";
-    case "MONITOR":
-      return "ticker-card monitor";
-    case "NOTIFY":
-      return "ticker-card notify";
-    default:
-      return "ticker-card approved";
-  }
-}
-
 export default function App() {
   const [transactions, setTransactions] = useState([]);
-  const [showAlertsPage, setShowAlertsPage] = useState(false);
+  const [customerProfiles, setCustomerProfiles] = useState([]);
   const [selectedTransaction, setSelectedTransaction] =
     useState(null);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
@@ -92,6 +29,34 @@ export default function App() {
   const [statusMessage, setStatusMessage] =
     useState("Connecting to live feed...");
   const [errorMessage, setErrorMessage] = useState("");
+
+  async function inspectCustomer(customer) {
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:8000/customers/${customer.customer_id}`
+      );
+      if (!response.ok) {
+        throw new Error("Failed to load customer history");
+      }
+
+      const data = await response.json();
+      setSelectedCustomer({ ...customer, profile: data.profile });
+      setSelectedCustomerTxs(data.transactions || customer.txs || []);
+    } catch {
+      setSelectedCustomer(customer);
+      setSelectedCustomerTxs(customer.txs || []);
+    }
+  }
+
+  async function loadCustomerProfiles() {
+    try {
+      const response = await fetch("http://127.0.0.1:8000/customers");
+      if (!response.ok) throw new Error("Failed to load customers");
+      setCustomerProfiles(await response.json());
+    } catch {
+      setErrorMessage("Unable to load customer profiles.");
+    }
+  }
 
   useEffect(() => {
     async function loadInitial() {
@@ -105,7 +70,7 @@ export default function App() {
 
         const data = await response.json();
         setTransactions(data || []);
-      } catch (error) {
+      } catch {
         setErrorMessage(
           "Unable to load recent transactions."
         );
@@ -113,6 +78,8 @@ export default function App() {
     }
 
     loadInitial();
+    window.setTimeout(loadCustomerProfiles, 0);
+    const profileRefresh = window.setInterval(loadCustomerProfiles, 2000);
 
     const socket = new WebSocket(
       "ws://127.0.0.1:8000/ws/transactions"
@@ -140,52 +107,20 @@ export default function App() {
       setStatusMessage("Live feed disconnected");
     };
 
-    return () => socket.close();
+    return () => {
+      socket.close();
+      window.clearInterval(profileRefresh);
+    };
   }, []);
 
   const recentTransactions = [...transactions].reverse();
-  const tickerTransactions = recentTransactions.slice(0, 30);
-  const monitorTransactions = recentTransactions.filter(
-    (tx) => getDisplayStatus(tx) === "MONITOR"
-  );
-  const escalationTransactions = recentTransactions.filter((tx) =>
-    ["REVIEW", "BLOCKED", "NOTIFY"].includes(
-      getDisplayStatus(tx)
-    )
-  );
-
-  const counts = transactions.reduce(
-    (acc, tx) => {
-      const status = getDisplayStatus(tx);
-      acc[status] = (acc[status] || 0) + 1;
-      return acc;
-    },
-    {
-      APPROVED: 0,
-      MONITOR: 0,
-      NOTIFY: 0,
-      REVIEW: 0,
-      BLOCKED: 0,
-    }
-  );
-
-  // latest transaction for simulated time
   const latestTx = recentTransactions[0] || null;
-
-  
-
-  const monitorCustomers = groupByCustomer(monitorTransactions);
-  const escalationCustomers = groupByCustomer(escalationTransactions);
 
   return (
     <div className="dashboard">
       <nav className="top-nav">
-        <button className="nav-link" onClick={() => setShowAlertsPage(false)}>Dashboard</button>
-        <button className="nav-link" onClick={() => setShowAlertsPage(true)}>Customer Alerts</button>
+        <span className="nav-link active">Dashboard</span>
       </nav>
-      {showAlertsPage ? (
-        <CustomerAlerts transactions={transactions} onInspect={(c, txs) => { setSelectedCustomer(c); setSelectedCustomerTxs(txs); setShowAlertsPage(false); }} />
-      ) : (
       <>
       <header className="header">
         <div className="header-row">
@@ -214,14 +149,6 @@ export default function App() {
         </div>
       </header>
 
-      <section className="ticker-container">
-        {tickerTransactions.length > 0 ? (
-          <Marquee items={tickerTransactions} getClass={getTickerClass} />
-        ) : (
-          <div className="ticker-empty">Waiting for live transactions...</div>
-        )}
-      </section>
-
       <div className="simulated-time-bar">
         <div className="sim-time">
           {latestTx ? (
@@ -234,95 +161,8 @@ export default function App() {
         </div>
       </div>
 
-      <div className="investigation-grid">
-        <section className="panel panel-monitor">
-          <div className="panel-heading">
-            <div>
-              <p className="panel-eyebrow">Monitoring queue</p>
-              <h2>Monitor alerts</h2>
-            </div>
-            <span className="panel-pill monitor-pill">
-              {monitorTransactions.length} active
-            </span>
-          </div>
-          <p className="panel-copy">
-            Transactions requiring additional observation before a final disposition.
-          </p>
-          {monitorCustomers.length > 0 ? (
-            monitorCustomers.slice(0, 10).map((c) => (
-              <div
-                key={c.customer_id}
-                className="investigation-card monitor-card"
-                onClick={() => {
-                  setSelectedCustomer(c);
-                  setSelectedCustomerTxs(c.txs);
-                }}
-              >
-                <div className="investigation-card-top">
-                  <div>
-                    <h3>{c.customer_id}</h3>
-                    <p className="muted-text">{c.count} transactions · €{c.total.toFixed(2)}</p>
-                  </div>
-                  <span className="panel-pill monitor-pill">{c.riskCount} alerts</span>
-                </div>
-                <div className="investigation-card-body">
-                  <p className="primary-reason">{c.txs[0] ? getPrimaryReason(c.txs[0]) : ''}</p>
-                  <p className="muted-text">Last: {c.lastSeen?.slice(11,16) || '—'}</p>
-                </div>
-              </div>
-            ))
-          ) : (
-            <div className="empty-state">
-              No monitor alerts pending.
-            </div>
-          )}
-        </section>
-
-        <section className="panel panel-escalation">
-          <div className="panel-heading">
-            <div>
-              <p className="panel-eyebrow">Escalation lane</p>
-              <h2>Review and blocked</h2>
-            </div>
-            <span className="panel-pill escalation-pill">
-              {escalationTransactions.length} needs attention
-            </span>
-          </div>
-          <p className="panel-copy">
-            High-priority cases that require analyst review or immediate blocking.
-          </p>
-          {escalationCustomers.length > 0 ? (
-            escalationCustomers.slice(0, 10).map((c) => (
-              <div
-                key={c.customer_id}
-                className="investigation-card escalation-card"
-                onClick={() => {
-                  setSelectedCustomer(c);
-                  setSelectedCustomerTxs(c.txs);
-                }}
-              >
-                <div className="investigation-card-top">
-                  <div>
-                    <h3>{c.customer_id}</h3>
-                    <p className="muted-text">{c.count} transactions · €{c.total.toFixed(2)}</p>
-                  </div>
-                  <span className={`panel-pill escalation-pill`}>{c.riskCount} alerts</span>
-                </div>
-                <div className="investigation-card-body">
-                  <p className="primary-reason">{c.txs[0] ? getPrimaryReason(c.txs[0]) : ''}</p>
-                  <p className="muted-text">Last: {c.lastSeen?.slice(11,16) || '—'}</p>
-                </div>
-              </div>
-            ))
-          ) : (
-            <div className="empty-state">
-              No escalations in the queue.
-            </div>
-          )}
-        </section>
-        </div>
+      <CustomerOverview profiles={customerProfiles} onInspect={inspectCustomer} />
         </>
-        )}
 
       {selectedTransaction && (
         <div
@@ -413,389 +253,148 @@ export default function App() {
         </div>
       )}
       {selectedCustomer && (
-        <div
-          className="modal-overlay"
-          onClick={() => setSelectedCustomer(null)}
-        >
-          <div
-            className="modal"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="modal-header">
-              <div>
-                <h2>Customer Investigation</h2>
-                <p className="muted-text">{selectedCustomer.customer_id}</p>
-              </div>
-              <button
-                className="close-button"
-                onClick={() => setSelectedCustomer(null)}
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="detail-section">
-              <h3>Visualisations</h3>
-              {/* Determine alert types for this customer and render appropriate visuals */}
-              {(() => {
-                const alertTypes = new Set();
-                selectedCustomerTxs.forEach(tx => {
-                  (tx.findings || []).forEach(f => alertTypes.add(f.title));
-                });
-                const types = Array.from(alertTypes);
-
-                if (types.length === 0) {
-                  return (
-                    <div className="empty-state">No alert visuals for this customer.</div>
-                  );
-                }
-
-                return (
-                  <div className="visualisations-grid">
-                    {types.includes('Spending Pattern Deviation') && (
-                      <div className="viz-large">
-                        <div className="viz-header">Deviation from Usual Spending</div>
-                        <DeviationViz txs={selectedCustomerTxs} />
-                      </div>
-                    )}
-
-                    {types.includes('High Daily Spend') && (
-                      <div className="viz-large">
-                        <div className="viz-header">High Daily Spend (Cumulative)</div>
-                        <DailySpendViz txs={selectedCustomerTxs} cap={1000} />
-                      </div>
-                    )}
-
-                    {types.includes('Impossible Travel') && (
-                      <div className="viz-large">
-                        <div className="viz-header">Impossible Travel (Context)</div>
-                        <ImpossibleTravelViz txs={selectedCustomerTxs} />
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
-
-              <h3>Transactions (latest)</h3>
-              <ul className="tx-history-list">
-                {selectedCustomerTxs.map((tx) => (
-                  <li key={tx.transaction_id} className={(tx.findings?.length || tx.alerts?.length) ? 'suspicious' : 'normal'}>
-                    <div className="tx-row">
-                      <div>
-                        <strong>{tx.merchant}</strong>
-                        <div className="muted-text">{tx.timestamp?.slice(11,16)} · {tx.country}</div>
-                      </div>
-                      <div>
-                        <div>€{tx.amount.toFixed(2)}</div>
-                        <div className="status-badge">{getDisplayStatus(tx)}</div>
-                      </div>
-                    </div>
-                    {(tx.findings?.length > 0)
-                      ? tx.findings.map((f) => (
-                          <div key={f.title} className="finding"><strong>{f.title}:</strong> {f.description}</div>
-                        ))
-                      : tx.alerts?.map((a) => <div key={a} className="finding">{formatText(a)}</div>)}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        </div>
+        <CustomerInvestigation
+          customer={selectedCustomer}
+          transactions={selectedCustomerTxs}
+          onClose={() => setSelectedCustomer(null)}
+        />
       )}
     </div>
   );
 }
 
-function Marquee({ items, getClass }) {
-  const trackRef = useRef(null);
-  const offsetRef = useRef(0);
-  const frameRef = useRef(null);
-  const singleWidthRef = useRef(0);
+function CustomerOverview({ profiles = [], onInspect }) {
+  const orderedProfiles = [...profiles].sort((a, b) => {
+    const severity = { BLOCKED: 4, REVIEW: 3, MONITOR: 2, APPROVED: 1 };
+    return (severity[b.status] || 0) - (severity[a.status] || 0)
+      || b.current_day_spend - a.current_day_spend;
+  });
+  const flagged = orderedProfiles.filter((profile) => profile.status !== "APPROVED");
 
-  useEffect(() => {
-    const track = trackRef.current;
-    if (!track) return;
-
-    // measure single content width (we duplicate items)
-    singleWidthRef.current = track.scrollWidth / 2 || 0;
-
-    // if the content is shorter than the viewport, don't animate — keep static
-    const viewportWidth = track.parentElement?.clientWidth || 0;
-    if (singleWidthRef.current <= viewportWidth) {
-      offsetRef.current = 0;
-      track.style.transform = `translateX(0)`;
-      return;
-    }
-
-    // ensure offset is within the new width to avoid visible jumps on items change
-    if (singleWidthRef.current > 0) {
-      offsetRef.current = offsetRef.current % singleWidthRef.current;
-    } else {
-      offsetRef.current = 0;
-    }
-
-    let lastTime = performance.now();
-    const speed = 60; // pixels per second
-
-    function step(now) {
-      const dt = (now - lastTime) / 1000;
-      lastTime = now;
-      offsetRef.current += speed * dt;
-      if (singleWidthRef.current > 0 && offsetRef.current >= singleWidthRef.current) {
-        offsetRef.current -= singleWidthRef.current;
-      }
-      track.style.transform = `translateX(${-offsetRef.current}px)`;
-      frameRef.current = requestAnimationFrame(step);
-    }
-
-    frameRef.current = requestAnimationFrame(step);
-
-    return () => {
-      if (frameRef.current) cancelAnimationFrame(frameRef.current);
-    };
-  }, [items]);
-
-  // render two copies for seamless loop
   return (
-    <div className="ticker-viewport">
-      <div className="ticker-track" ref={trackRef} style={{transform: 'translateX(0)'}}>
-        {items.map((tx, i) => (
-          <div key={`A-${tx.transaction_id}-${i}`} className={getClass(tx)}>
-            <span className="ticker-time">{tx.timestamp?.slice(11,16) || '--:--'}</span>
-            <span>{tx.customer_id}</span>
-            <span>{tx.merchant}</span>
-            <span>€{tx.amount.toFixed(2)}</span>
-          </div>
-        ))}
-        {items.map((tx, i) => (
-          <div key={`B-${tx.transaction_id}-${i}`} className={getClass(tx)}>
-            <span className="ticker-time">{tx.timestamp?.slice(11,16) || '--:--'}</span>
-            <span>{tx.customer_id}</span>
-            <span>{tx.merchant}</span>
-            <span>€{tx.amount.toFixed(2)}</span>
-          </div>
-        ))}
+    <section className="customer-overview">
+      <div className="overview-heading">
+        <div>
+          <p className="panel-eyebrow">Customer risk monitor</p>
+          <h2>{flagged.length} customers need attention</h2>
+        </div>
+        <p className="overview-note">Select a customer to inspect their behaviour over time.</p>
       </div>
-    </div>
-  );
-}
-
-function CustomerAlerts({ transactions = [], onInspect }) {
-  // Build groups from the full transaction list so inspect shows ALL txs
-  // then filter to only customers that have at least one alert for the summary view.
-  const allGroups = groupByCustomer(transactions);
-  const groups = allGroups.filter(g => g.riskCount > 0);
-
-  return (
-    <div className="customer-alerts-page">
-      <header className="page-header">
-        <h2>Customers with Alerts</h2>
-        <p className="muted-text">Click a customer to inspect their transactions and visualisations.</p>
-      </header>
-
-      <div className="alerts-list">
-        {groups.length === 0 && <div className="empty-state">No customers with alerts.</div>}
-
-        {groups.map((c) => {
-          const alertCounts = c.txs.reduce((acc, tx) => {
-            (tx.findings || []).forEach(f => { acc[f.title] = (acc[f.title] || 0) + 1 });
-            (tx.alerts || []).forEach(a => { acc[a] = (acc[a] || 0) + 1 });
-            return acc;
-          }, {});
-
+      <div className="customer-grid">
+        {orderedProfiles.map((profile) => {
+          const utilization = profile.daily_limit
+            ? Math.min(profile.current_day_spend / profile.daily_limit, 1.25) * 100
+            : 0;
           return (
-            <div key={c.customer_id} className="customer-card">
-              <div className="customer-card-top">
-                <div>
-                  <h3>{c.customer_id}</h3>
-                  <p className="muted-text">{c.count} txs · €{c.total.toFixed(2)}</p>
-                </div>
-                <div>
-                  <button className="small" onClick={() => onInspect(c, c.txs)}>Inspect</button>
-                </div>
-              </div>
-
-              <div className="customer-card-body">
-                <div className="card-stats">
-                  <div className="stat">
-                    <div className="stat-value">{c.riskCount}</div>
-                    <div className="stat-label">Alerts</div>
-                  </div>
-                  <div className="stat">
-                    <div className="stat-value">{Object.keys(alertCounts).length}</div>
-                    <div className="stat-label">Alert types</div>
-                  </div>
-                  <div className="stat">
-                    <div className="stat-value">{Math.round((c.riskCount / Math.max(1, c.count)) * 100)}%</div>
-                    <div className="stat-label">% txs suspicious</div>
-                  </div>
-                </div>
-
-                <div className="alerts-summary">
-                  {Object.entries(alertCounts).slice(0,3).map(([k,v]) => (
-                    <div key={k} className="alert-row">
-                      <div className="alert-desc">{formatText(k)}</div>
-                      <div className="alert-meta muted-text">{v}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )
+            <button
+              type="button"
+              key={profile.customer_id}
+              className={`customer-row status-${profile.status.toLowerCase()}`}
+              onClick={() => onInspect(profile)}
+            >
+              <span className="customer-identity">
+                <strong>{profile.customer_id}</strong>
+                <small>{profile.current_day_transaction_count} today · {profile.transaction_count} total</small>
+              </span>
+              <span className="customer-spend">
+                <strong>€{profile.current_day_spend.toFixed(0)}</strong>
+                <small>of €{profile.daily_limit.toFixed(0)}</small>
+              </span>
+              <span className="customer-meter" aria-label={`${Math.round(utilization)} percent of daily limit`}>
+                <span style={{ width: `${Math.min(utilization, 100)}%` }} />
+              </span>
+              <span className={`customer-status ${profile.status.toLowerCase()}`}>
+                {profile.status === "APPROVED" ? "Clear" : profile.latest_alert || profile.status}
+              </span>
+              <span className="customer-chevron" aria-hidden="true">→</span>
+            </button>
+          );
         })}
       </div>
-    </div>
+    </section>
   );
 }
 
-function AmountSparkline({ txs = [] }) {
-  const canvasRef = useRef(null);
-  const chartRef = useRef(null);
-
-  useEffect(() => {
-    const ctx = canvasRef.current?.getContext('2d');
-    if (!ctx) return;
-
-    const labels = txs.map(t => (t.timestamp || '').slice(11,16)).reverse();
-    const data = txs.map(t => t.amount).reverse();
-
-    // mark anomalies in red if findings include Spending Pattern Deviation
-    const pointBackground = txs.map(t => (
-      (t.findings?.some(f => f.title === 'Spending Pattern Deviation')) ? 'rgba(220,20,60,0.9)' : 'rgba(30,144,255,0.9)'
-    )).reverse();
-
-    if (chartRef.current) chartRef.current.destroy();
-
-    // Chart is exposed globally via Chart.js UMD
-    chartRef.current = new window.Chart(ctx, {
-      type: 'line',
-      data: {
-        labels,
-        datasets: [{
-          label: 'Amount',
-          data,
-          borderColor: 'rgba(30,144,255,0.9)',
-          backgroundColor: 'rgba(30,144,255,0.1)',
-          pointBackgroundColor: pointBackground,
-          pointRadius: 4,
-          tension: 0.3,
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: { x: { display: false }, y: { display: true } }
-      }
-    });
-
-    return () => { if (chartRef.current) chartRef.current.destroy(); };
-  }, [txs]);
-
-  return (
-    <div className="sparkline-wrap">
-      <canvas ref={canvasRef} style={{width: 200, height: 60}} />
-    </div>
+function CustomerInvestigation({ customer, transactions, onClose }) {
+  const profile = customer.profile || customer;
+  const dailyTransactions = transactions
+    .filter((transaction) => transaction.simulation_day === transactions.at(-1)?.simulation_day)
+    .sort((a, b) => (a.timestamp || "").localeCompare(b.timestamp || ""));
+  const dailySpend = dailyTransactions.reduce((total, transaction) => total + transaction.amount, 0);
+  const dailyLimitFinding = dailyTransactions
+    .flatMap((transaction) => transaction.findings || [])
+    .find((finding) => finding.title === "High Daily Spend");
+  const crossingTransaction = dailyTransactions.find((transaction) =>
+    (transaction.findings || []).some((finding) => finding.title === "High Daily Spend")
   );
-}
-
-function CustomerAmountChart({ txs = [] }) {
-  const canvasRef = useRef(null);
-  const chartRef = useRef(null);
-
-  useEffect(() => {
-    const ctx = canvasRef.current?.getContext('2d');
-    if (!ctx) return;
-
-    const items = [...txs].reverse();
-    const labels = items.map(t => (t.timestamp || '').slice(11,16));
-    const data = items.map(t => t.amount);
-    const pointBackground = items.map(t => (
-      (t.findings?.some(f => f.title === 'Spending Pattern Deviation')) ? 'rgba(220,20,60,0.9)' : 'rgba(30,144,255,0.9)'
-    ));
-
-    if (chartRef.current) chartRef.current.destroy();
-
-    chartRef.current = new window.Chart(ctx, {
-      type: 'line',
-      data: {
-        labels,
-        datasets: [{
-          label: 'Amount',
-          data,
-          borderColor: 'rgba(30,144,255,0.9)',
-          backgroundColor: 'rgba(30,144,255,0.06)',
-          pointBackgroundColor: pointBackground,
-          pointRadius: 5,
-          tension: 0.25,
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: { x: { display: true }, y: { display: true } }
-      }
-    });
-
-    return () => { if (chartRef.current) chartRef.current.destroy(); };
-  }, [txs]);
 
   return (
-    <div style={{height: 220}}>
-      <canvas ref={canvasRef} style={{width: '100%', height: '100%'}} />
-    </div>
-  );
-}
-
-function CountryTimeline({ txs = [] }) {
-  const items = [...txs].sort((a,b) => (a.timestamp||'').localeCompare(b.timestamp||''));
-
-  return (
-    <div className="country-timeline">
-      {items.map((t, i) => {
-        const isImpossible = (t.findings || []).some(f => f.title === 'Impossible Travel');
-        return (
-          <div key={t.transaction_id || i} className={`country-step ${isImpossible ? 'impossible' : ''}`}>
-            <div className="country">{t.country}</div>
-            <div className="ct-meta muted-text">{t.timestamp?.slice(11,16)} · €{t.amount.toFixed(2)}</div>
-            {isImpossible && <div className="ct-flag">Impossible travel</div>}
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="investigation-sheet" onClick={(event) => event.stopPropagation()}>
+        <header className="investigation-header">
+          <div>
+            <p className="panel-eyebrow">Customer investigation</p>
+            <h2>{profile.customer_id}</h2>
+            <p className="muted-text">Behaviour profile · {profile.transaction_count} transactions observed</p>
           </div>
-        );
-      })}
+          <button className="icon-close" type="button" onClick={onClose} aria-label="Close investigation">×</button>
+        </header>
+
+        <div className="investigation-summary">
+          <div><span>Current state</span><strong className={`summary-state ${String(profile.status).toLowerCase()}`}>{profile.status}</strong></div>
+          <div><span>Today</span><strong>€{dailySpend.toFixed(2)}</strong></div>
+          <div><span>Daily limit</span><strong>€{profile.daily_limit.toFixed(2)}</strong></div>
+          <div><span>Transactions</span><strong>{dailyTransactions.length}</strong></div>
+        </div>
+
+        <section className="investigation-section">
+          <div className="section-heading">
+            <div><p className="panel-eyebrow">Daily behaviour</p><h3>Spend progression</h3></div>
+            {crossingTransaction && <span className="crossing-note">Limit crossed at {crossingTransaction.timestamp?.slice(11, 16)}</span>}
+          </div>
+          <DailySpendViz txs={dailyTransactions} cap={profile.daily_limit} />
+          <div className="limit-explanation">
+            <span className="limit-key" />
+            <p><strong>Customer-specific limit: €{profile.daily_limit.toFixed(0)}</strong><br />
+              This limit is set for this customer’s normal activity profile. The chart marks the transaction that pushed today’s cumulative spend beyond it.
+            </p>
+          </div>
+          {dailyLimitFinding?.context && (
+            <div className="trigger-callout">
+              <strong>Why it was flagged</strong>
+              <span>€{dailyLimitFinding.context.spend_before.toFixed(2)} before this payment + €{dailyLimitFinding.context.transaction_amount.toFixed(2)} = €{dailyLimitFinding.context.spend_after.toFixed(2)}</span>
+            </div>
+          )}
+        </section>
+
+        <section className="investigation-section">
+          <div className="section-heading"><div><p className="panel-eyebrow">Context</p><h3>What this customer usually does</h3></div></div>
+          <div className="profile-facts">
+            <div><span>Typical amount</span><strong>€{profile.average_amount.toFixed(2)}</strong></div>
+            <div><span>Usual countries</span><strong>{(profile.typical_countries || []).slice(0, 3).map(([country]) => country).join(" · ") || "—"}</strong></div>
+            <div><span>Frequent categories</span><strong>{(profile.typical_categories || []).slice(0, 2).map(([category]) => category).join(" · ") || "—"}</strong></div>
+          </div>
+        </section>
+
+        <section className="investigation-section">
+          <div className="section-heading"><div><p className="panel-eyebrow">Activity log</p><h3>Today’s transactions</h3></div><span className="muted-text">{dailyTransactions.length} events</span></div>
+          <div className="compact-transaction-list">
+            {dailyTransactions.map((transaction) => {
+              const flagged = transaction.findings?.length > 0;
+              return (
+                <div key={transaction.transaction_id} className={`compact-transaction ${flagged ? "flagged" : ""}`}>
+                  <span className="compact-time">{transaction.timestamp?.slice(11, 16)}</span>
+                  <span className="compact-merchant"><strong>{transaction.merchant}</strong><small>{transaction.merchant_category} · {transaction.country}</small></span>
+                  <span className="compact-amount">€{transaction.amount.toFixed(2)}</span>
+                  {flagged && <span className="compact-reason">{transaction.findings[0].title}</span>}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      </div>
     </div>
   );
-}
-
-function countryCodeToFlag(cc) {
-  if (!cc || cc.length !== 2) return '';
-  const A = 0x1F1E6;
-  return String.fromCodePoint(...[...cc.toUpperCase()].map(c => A + c.charCodeAt(0) - 65));
-}
-
-function DeviationViz({ txs = [] }) {
-  const canvasRef = useRef(null);
-  const chartRef = useRef(null);
-
-  useEffect(() => {
-    const ctx = canvasRef.current?.getContext('2d');
-    if (!ctx) return;
-    const items = [...txs].sort((a,b) => (a.timestamp||'').localeCompare(b.timestamp||''));
-    const labels = items.map(t => (t.timestamp||'').slice(11,16));
-    const data = items.map(t => t.amount);
-    const pointBackground = items.map(t => ((t.findings||[]).some(f => f.title === 'Spending Pattern Deviation') ? 'rgba(220,20,60,0.95)' : 'rgba(30,144,255,0.9)'));
-
-    if (chartRef.current) chartRef.current.destroy();
-    chartRef.current = new window.Chart(ctx, {
-      type: 'line',
-      data: { labels, datasets: [{ label: 'Amount', data, borderColor: 'rgba(7,89,133,0.9)', backgroundColor: 'rgba(7,89,133,0.06)', pointBackgroundColor: pointBackground, pointRadius: 5, tension: 0.2 }] },
-      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
-    });
-
-    return () => { if (chartRef.current) chartRef.current.destroy(); };
-  }, [txs]);
-
-  return <div style={{height:220}}><canvas ref={canvasRef} style={{width:'100%',height:'100%'}} /></div>;
 }
 
 function DailySpendViz({ txs = [], cap = 1000 }) {
@@ -808,65 +407,20 @@ function DailySpendViz({ txs = [], cap = 1000 }) {
     const items = [...txs].sort((a,b) => (a.timestamp||'').localeCompare(b.timestamp||''));
     const labels = items.map(t => (t.timestamp||'').slice(11,16));
     const cumulative = items.reduce((acc, t, i) => { acc.push((acc[i-1]||0) + t.amount); return acc; }, []);
+    const crossingIndex = cumulative.findIndex((value) => value > cap);
 
     if (chartRef.current) chartRef.current.destroy();
     chartRef.current = new window.Chart(ctx, {
       type: 'line',
-      data: { labels, datasets: [{ label: 'Cumulative', data: cumulative, borderColor: 'rgba(16,185,129,0.9)', backgroundColor: 'rgba(16,185,129,0.06)', pointRadius: 3, tension: 0.2 }] },
-      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, annotation: {} }, scales: { y: { suggestedMin: 0 } }, elements: { line: { fill: false } } }
+      data: { labels, datasets: [
+        { label: 'Cumulative spend', data: cumulative, borderColor: '#0f766e', backgroundColor: 'rgba(15,118,110,0.08)', pointBackgroundColor: cumulative.map((value, index) => index === crossingIndex ? '#dc2626' : '#0f766e'), pointRadius: cumulative.map((value, index) => index === crossingIndex ? 6 : 3), tension: 0.2, fill: true },
+        { label: 'Customer limit', data: labels.map(() => cap), borderColor: '#dc2626', borderDash: [7, 5], pointRadius: 0, tension: 0 }
+      ] },
+      options: { responsive: true, maintainAspectRatio: false, animation: false, resizeDelay: 0, plugins: { legend: { display: false }, annotation: {} }, scales: { y: { suggestedMin: 0 } }, elements: { line: { fill: false } } }
     });
-
-    // draw cap line manually on top layer
-    const chart = chartRef.current;
-    if (chart) {
-      const yScale = chart.scales['y'];
-      const xScale = chart.scales['x'];
-      const ctx2 = chart.ctx;
-      chart.update();
-      // plugin draw
-      chart.$cap = () => {
-        const x0 = xScale.left;
-        const x1 = xScale.right;
-        const y = yScale.getPixelForValue(cap);
-        ctx2.save();
-        ctx2.strokeStyle = 'rgba(220,20,60,0.9)';
-        ctx2.setLineDash([6,4]);
-        ctx2.beginPath();
-        ctx2.moveTo(x0,y);
-        ctx2.lineTo(x1,y);
-        ctx2.stroke();
-        ctx2.restore();
-      };
-      chart.$cap();
-    }
 
     return () => { if (chartRef.current) chartRef.current.destroy(); };
   }, [txs, cap]);
 
-  return <div style={{height:220}}><canvas ref={canvasRef} style={{width:'100%',height:'100%'}} /></div>;
-}
-
-function ImpossibleTravelViz({ txs = [] }) {
-  const items = [...txs].sort((a,b) => (a.timestamp||'').localeCompare(b.timestamp||''));
-  const offendingIndexes = items.map((t,i) => ((t.findings||[]).some(f=>f.title==='Impossible Travel')?i:-1)).filter(i=>i>=0);
-
-  if (offendingIndexes.length === 0) return <div className="empty-state">No impossible travel findings.</div>;
-
-  const idx = offendingIndexes[0];
-  const start = Math.max(0, idx-2);
-  const end = Math.min(items.length-1, idx+2);
-  const slice = items.slice(start, end+1);
-
-  return (
-    <div className="impossible-collection">
-      {slice.map((t, i) => (
-        <div key={t.transaction_id || i} className={`mini-tx ${ (start+i)===idx ? 'flagged' : ''}`}>
-          <div className="mini-time">{t.timestamp?.slice(11,16)}</div>
-          <div className="mini-amt">€{t.amount.toFixed(2)}</div>
-          <div className="mini-merchant">{t.merchant}</div>
-          <div className="mini-country">{countryCodeToFlag(t.country)} {t.country}</div>
-        </div>
-      ))}
-    </div>
-  );
+  return <div className="daily-spend-chart"><canvas ref={canvasRef} /></div>;
 }

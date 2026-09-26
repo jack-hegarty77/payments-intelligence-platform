@@ -7,7 +7,12 @@ from stripe_service import get_recent_payments
 import asyncio
 
 from simulation_engine import generate_transaction
-from risk_engine import assess_transaction
+from risk_engine import (
+    assess_transaction,
+    customer_transaction_history,
+    get_customer_profile,
+    get_customer_profiles,
+)
 
 app = FastAPI(title="Payments Intelligence API")
 
@@ -53,7 +58,8 @@ async def start_stream():
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173"
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -142,3 +148,18 @@ def stripe_payments():
 @app.get("/transactions/live")
 def get_live_transactions():
     return transactions_store[-20:]
+
+
+@app.get("/customers")
+def get_customers():
+    return get_customer_profiles()
+
+
+@app.get("/customers/{customer_id}")
+def get_customer(customer_id: str):
+    profile = get_customer_profile(customer_id)
+    history = customer_transaction_history.get(customer_id, [])
+    return {
+        "profile": profile,
+        "transactions": [transaction.model_dump() for transaction in history],
+    }

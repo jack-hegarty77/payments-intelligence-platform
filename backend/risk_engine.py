@@ -3,7 +3,7 @@ from datetime import datetime
 import statistics
 
 from models import Transaction, Finding
-from simulation_engine import MERCHANTS, SANCTIONED_COUNTRIES
+from simulation_engine import CUSTOMER_PROFILES, MERCHANTS, SANCTIONED_COUNTRIES
 
 # --------------------------------------------------
 # Behaviour state
@@ -50,7 +50,7 @@ def _update_customer_profile(transaction: Transaction):
     history = customer_transaction_history.setdefault(customer_id, [])
     history.append(transaction)
 
-    if len(history) > 50:
+    if len(history) > 500:
         history.pop(0)
 
     profile = _get_customer_profile(customer_id)
@@ -61,17 +61,79 @@ def _update_customer_profile(transaction: Transaction):
     profile["median_amount"] = round(statistics.median(amounts), 2) if amounts else 0.0
     profile["amount_stddev"] = round(statistics.pstdev(amounts), 2) if len(amounts) > 1 else 0.0
     profile["max_amount"] = round(max(amounts), 2) if amounts else 0.0
-    profile["typical_countries"].update(
+    profile["typical_countries"] = Counter(
         tx.country for tx in history if tx.country
     )
-    profile["typical_merchants"].update(
+    profile["typical_merchants"] = Counter(
         tx.merchant for tx in history if tx.merchant
     )
-    profile["typical_categories"].update(
+    profile["typical_categories"] = Counter(
         tx.merchant_category for tx in history if tx.merchant_category
     )
     profile["last_country"] = transaction.country
     profile["last_timestamp"] = _parse_timestamp(transaction.timestamp)
+
+
+def get_customer_profile(customer_id):
+    profile = _get_customer_profile(customer_id)
+    history = customer_transaction_history.get(customer_id, [])
+    current_day = history[-1].simulation_day if history else None
+    current_day_history = [
+        transaction for transaction in history
+        if transaction.simulation_day == current_day
+    ]
+    daily_total = customer_daily_totals.get(
+        (customer_id, current_day),
+        0.0,
+    ) if current_day is not None else 0.0
+    historical_findings = [
+        finding
+        for transaction in history
+        for finding in transaction.findings
+    ]
+    findings = [
+        finding
+        for transaction in current_day_history
+        for finding in transaction.findings
+    ]
+    severities = {finding.severity for finding in findings}
+    status = (
+        "BLOCKED" if "Critical" in severities else
+        "REVIEW" if "High" in severities else
+        "MONITOR" if "Medium" in severities else
+        "APPROVED"
+    )
+
+    return {
+        "customer_id": customer_id,
+        "transaction_count": profile["transaction_count"],
+        "average_amount": profile["average_amount"],
+        "median_amount": profile["median_amount"],
+        "amount_stddev": profile["amount_stddev"],
+        "max_amount": profile["max_amount"],
+        "typical_countries": profile["typical_countries"].most_common(),
+        "typical_merchants": profile["typical_merchants"].most_common(),
+        "typical_categories": profile["typical_categories"].most_common(),
+        "last_country": profile["last_country"],
+        "last_timestamp": (
+            profile["last_timestamp"].isoformat()
+            if profile["last_timestamp"] else None
+        ),
+        "current_day_spend": round(daily_total, 2),
+        "daily_limit": CUSTOMER_PROFILES.get(customer_id, {}).get("daily_limit", 1000),
+        "current_day_transaction_count": len(current_day_history),
+        "alert_count": len(findings),
+        "latest_alert": findings[-1].title if findings else "",
+        "status": status,
+        "historical_alert_count": len(historical_findings),
+    }
+
+
+def get_customer_profiles():
+    return [
+        get_customer_profile(customer_id)
+        for customer_id in sorted(CUSTOMER_PROFILES)
+    ]
 
 
 # =====================================================
@@ -189,19 +251,34 @@ def behaviour_detector(transaction: Transaction):
                 )
             )
 
-    # Daily spend guardrail
-    current_total = customer_daily_totals.get(customer, 0)
+    # Customer-specific daily spend guardrail
+    daily_key = (customer, transaction.simulation_day)
+    current_total = customer_daily_totals.get(daily_key, 0)
     new_total = current_total + transaction.amount
-    customer_daily_totals[customer] = new_total
+    customer_daily_totals[daily_key] = new_total
+    daily_limit = CUSTOMER_PROFILES.get(customer, {}).get("daily_limit", 1000)
 
-    # Increase daily spend guardrail to reduce false positives from active users
-    if new_total > 1000:
+    if new_total > daily_limit:
         findings.append(
             Finding(
                 detector="Behaviour",
                 severity="Medium",
                 title="High Daily Spend",
-                description=f"Customer has spent {new_total:.2f} today.",
+                description=(
+                    f"Customer has spent {new_total:.2f} today, exceeding their "
+                    f"daily limit of {daily_limit:.2f}."
+                ),
+                context={
+                    "period": "day",
+                    "limit": daily_limit,
+                    "spend_before": round(current_total, 2),
+                    "spend_after": round(new_total, 2),
+                    "transaction_amount": round(transaction.amount, 2),
+                    "transaction_count": len(
+                        [tx for tx in history if tx.simulation_day == transaction.simulation_day]
+                    ) + 1,
+                    "crossed_limit": current_total <= daily_limit,
+                },
             )
         )
 

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List
+from typing import Dict, List
 
 
 # =====================================================
@@ -21,6 +21,7 @@ class Finding(BaseModel):
     severity: str
     title: str
     description: str
+    context: Dict[str, object] = Field(default_factory=dict)
 
 
 # =====================================================
